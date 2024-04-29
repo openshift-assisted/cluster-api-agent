@@ -283,6 +283,11 @@ func (r *AgentBootstrapConfigReconciler) createInfraEnv(ctx context.Context, con
 	}
 	infraEnv.Spec = aiv1beta1.InfraEnvSpec{
 		PullSecretRef: pullSecret,
+		ClusterRef: &aiv1beta1.ClusterReference{
+			Name:      config.Spec.ClusterDeploymentRef.Name,
+			Namespace: config.Spec.ClusterDeploymentRef.Namespace,
+		},
 	}
+
 	return infraEnv, r.Create(ctx, infraEnv)
 }

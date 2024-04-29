@@ -28,8 +28,9 @@ import (
 type AgentBootstrapConfigSpec struct {
 	// Here we can add details to configure infraenv
 	// InfraEnvRef references the infra env to generate the ISO
-	InfraEnvRef   *corev1.ObjectReference      `json:"infraEnvRef,omitempty"`
-	PullSecretRef *corev1.LocalObjectReference `json:"pullSecretRef,omitempty"`
+	InfraEnvRef          *corev1.ObjectReference      `json:"infraEnvRef,omitempty"`
+	ClusterDeploymentRef *corev1.ObjectReference      `json:"infraEnvRef,omitempty"`
+	PullSecretRef        *corev1.LocalObjectReference `json:"pullSecretRef,omitempty"`
 }
 
 // AgentBootstrapConfigStatus defines the observed state of AgentBootstrapConfig

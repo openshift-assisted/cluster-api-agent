@@ -92,6 +92,11 @@ func (in *AgentBootstrapConfigSpec) DeepCopyInto(out *AgentBootstrapConfigSpec) 
 		*out = new(v1.ObjectReference)
 		**out = **in
 	}
+	if in.ClusterDeploymentRef != nil {
+		in, out := &in.ClusterDeploymentRef, &out.ClusterDeploymentRef
+		*out = new(v1.ObjectReference)
+		**out = **in
+	}
 	if in.PullSecretRef != nil {
 		in, out := &in.PullSecretRef, &out.PullSecretRef
 		*out = new(v1.LocalObjectReference)

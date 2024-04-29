@@ -157,6 +157,7 @@ func (r *AgentControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			bootstrapSpec := acp.Spec.AgentBootstrapConfigSpec.DeepCopy()
 			log.Info("agent bootstrap config", "spec", bootstrapSpec, "all acp spec", acp.Spec)
 			bootstrapSpec.PullSecretRef = acp.Spec.AgentBootstrapConfigSpec.PullSecretRef.DeepCopy()
+			bootstrapSpec.ClusterDeploymentRef = acp.Spec.AgentConfigSpec.ClusterDeploymentRef.DeepCopy()
 			if err := r.cloneConfigsAndGenerateMachine(ctx, cluster, acp, bootstrapSpec); err != nil {
 				log.Info("Error cloning configs", "err", err)
 			}
