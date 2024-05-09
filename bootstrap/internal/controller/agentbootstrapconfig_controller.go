@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
 
 	hivev1 "github.com/openshift/hive/apis/hive/v1"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
@@ -77,6 +78,7 @@ func (r *AgentBootstrapConfigReconciler) getMachineTemplate(ctx context.Context,
 // +kubebuilder:rbac:groups=hive.openshift.io,resources=clusterdeployments,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machines;machines/status,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=clusters;clusters/status,verbs=get;list;watch;create;update;patch;delete
 //metal3machinetemplates" in API group "infrastructure.cluster.x-k8s.io"
 //+kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=metal3machines;metal3machines/status,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=bootstrap.cluster.x-k8s.io,resources=agentbootstrapconfigs,verbs=get;list;watch;create;update;patch;delete
@@ -115,6 +117,7 @@ func (r *AgentBootstrapConfigReconciler) Reconcile(ctx context.Context, req ctrl
 		}
 		return ctrl.Result{}, err
 	}
+
 	// Initialize the patch helper.
 	patchHelper, err := patch.NewHelper(config, r.Client)
 	if err != nil {
@@ -195,9 +198,19 @@ func (r *AgentBootstrapConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 
 	// Get the Machine associated with this agentbootstrapconfig
-
 	// TODO: change the way we get this, for now it has the same name but that may not be the case - we should change to fetch by spec's reference to this agentbootstrapconfig
-	machine, err := util.GetMachineByName(ctx, r.Client, config.Namespace, config.Name)
+	machineOwnerName := ""
+	for _, owner := range config.OwnerReferences {
+		if owner.Kind == "Machine" {
+			machineOwnerName = owner.Name
+			break
+		}
+	}
+	if machineOwnerName == "" {
+		log.Info("No machine owns this agentbootstrapconfig", "name", config.Name)
+		return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
+	}
+	machine, err := util.GetMachineByName(ctx, r.Client, config.Namespace, machineOwnerName)
 	if err != nil {
 		log.Error(err, "couldn't get machine associated with agentbootstrapconfig", "name", config.Name)
 		return ctrl.Result{}, err
@@ -210,7 +223,6 @@ func (r *AgentBootstrapConfigReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{}, err
 	}
 
-	// TODO: check if it's a control plane or worker
 	log.Info("Found metal3 machine owned by machine", "name", metal3Machine.Name, "namespace", metal3Machine.Namespace)
 	if metal3Machine.Spec.Image.URL == "" || metal3Machine.Spec.Image.URL != config.Status.ISODownloadURL {
 		// Change metal3 image url if it's empty or it doesn't match the agent bootstrap config iso download url
@@ -223,6 +235,22 @@ func (r *AgentBootstrapConfigReconciler) Reconcile(ctx context.Context, req ctrl
 		log.Info("Added ISO URLs to metal3 machines", "machine", metal3Machine.Name, "namespace", metal3Machine.Namespace)
 	}
 
+	configType := "control plane"
+	if !util.IsControlPlaneMachine(machine) {
+		configType = "worker"
+		// Worker node, check if cluster's control plane is initialized
+		cluster := &clusterv1.Cluster{}
+		if err := r.Client.Get(ctx, client.ObjectKey{Name: clusterName, Namespace: machine.Namespace}, cluster); err != nil {
+			log.Error(err, "Failed to retrieve Cluster associated with machine deployment", "machine name", machine.Name, "cluster name", clusterName)
+			return ctrl.Result{}, err
+		}
+
+		if !cluster.Status.ControlPlaneReady {
+			// Cluster is not ready yet, requeue the worker for now
+			log.Info("Cluster's control plane for worker node is not ready, requeue", "cluster name", cluster.Name, "agentbootstrapconfig name", config.Name)
+			return ctrl.Result{RequeueAfter: 10 * time.Minute}, nil
+		}
+	}
 	// create secret
 	secret := &corev1.Secret{}
 	if err := r.Client.Get(ctx, client.ObjectKey{Namespace: config.Namespace, Name: config.Name}, secret); err != nil {
@@ -239,6 +267,7 @@ func (r *AgentBootstrapConfigReconciler) Reconcile(ctx context.Context, req ctrl
 		}
 	}
 
+	log.Info("Setting agentbootstrap config status to ready", "name", config.Name, "namespace", config.Namespace, "config type", configType)
 	config.Status.Ready = true
 	config.Status.DataSecretName = &config.Name
 	conditions.MarkTrue(config, bootstrapv1beta1.DataSecretAvailableCondition)
