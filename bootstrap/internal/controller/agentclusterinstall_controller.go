@@ -167,7 +167,13 @@ func (r *AgentClusterInstallReconciler) labelWorkloadClusterNodes(ctx context.Co
 	}
 	log.Info("found nodes in workload cluster", "number", len(nodes.Items))
 	for _, node := range nodes.Items {
-		machine, err := getMachineByMatchingIP(*metal3Machines, node)
+		addresses := []string{}
+		for _, nodeAddr := range node.Status.Addresses {
+			if nodeAddr.Type == corev1.NodeInternalIP {
+				addresses = append(addresses, nodeAddr.Address)
+			}
+		}
+		machine, err := getMachineByMatchingIP(*metal3Machines, addresses...)
 		if err != nil {
 			log.Info("could not match any machine to node", "name", node.Name)
 			continue
@@ -182,15 +188,13 @@ func (r *AgentClusterInstallReconciler) labelWorkloadClusterNodes(ctx context.Co
 }
 
 // return metal3 machine from list when matching node's internal IP address
-func getMachineByMatchingIP(machines metal3.Metal3MachineList, node corev1.Node) (*metal3.Metal3Machine, error) {
+func getMachineByMatchingIP(machines metal3.Metal3MachineList, addresses ...string) (*metal3.Metal3Machine, error) {
 	for _, machine := range machines.Items {
 		for _, machineAddr := range machine.Status.Addresses {
 			if corev1.NodeAddressType(machineAddr.Type) == corev1.NodeInternalIP {
-				for _, nodeAddr := range node.Status.Addresses {
-					if nodeAddr.Type == corev1.NodeInternalIP {
-						if nodeAddr.Address == machineAddr.Address {
-							return &machine, nil
-						}
+				for _, address := range addresses {
+					if address == machineAddr.Address {
+						return &machine, nil
 					}
 				}
 			}
