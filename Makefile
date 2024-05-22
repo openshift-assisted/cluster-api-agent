@@ -136,6 +136,11 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 	- $(CONTAINER_TOOL) buildx rm project-v3-builder
 	rm Dockerfile.cross
 
+.PHONY: build-installer-all
+build-installer-all:
+	$(MAKE) build-installer PROVIDER=bootstrap
+	$(MAKE) build-installer PROVIDER=controlplane
+
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
 	mkdir -p dist
