@@ -18,10 +18,11 @@ package controller
 
 import (
 	"context"
+	"time"
+
 	"sigs.k8s.io/cluster-api/controllers/external"
 	"sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/cluster-api/util/labels/format"
-	"time"
 
 	bootstrapv1beta1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1beta1"
 	"github.com/openshift/hive/apis/hive/v1/agent"
@@ -97,6 +98,7 @@ func (r *AgentControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			log.Error(rerr, "couldn't update AgentControlPlane Status", "name", acp.Name, "namespace", acp.Namespace)
 		}
 	}()
+
 	cluster, err := util.GetOwnerCluster(ctx, r.Client, acp.ObjectMeta)
 	if err != nil {
 		log.Error(err, "Failed to retrieve owner Cluster from the API Server")
@@ -119,6 +121,7 @@ func (r *AgentControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// TODO: handle changes in pull-secret (for example)
 	// create clusterdeployment if not set
 	if acp.Spec.AgentConfigSpec.ClusterDeploymentRef == nil {
+		log.Info("Creating clusterdeployment")
 		err, clusterDeployment := r.createClusterDeployment(ctx, acp, cluster.Name)
 		if err != nil {
 			log.Error(
@@ -141,6 +144,21 @@ func (r *AgentControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Re
 				log.Error(rerr, "couldn't update AgentControlPlane", "name", acp.Name, "namespace", acp.Namespace)
 				return ctrl.Result{}, err
 			}
+			log.Info("Added clusterdeployment ref")
+		}
+	}
+	// Retrieve clusterdeployment
+	cd := &hivev1.ClusterDeployment{}
+	if err := r.Client.Get(ctx, types.NamespacedName{Namespace: acp.Spec.AgentConfigSpec.ClusterDeploymentRef.Namespace, Name: acp.Spec.AgentConfigSpec.ClusterDeploymentRef.Name}, cd); err != nil {
+		if apierrors.IsNotFound(err) {
+			// Cluster deployment no longer exists, unset reference and re-reconcile
+			acp.Spec.AgentConfigSpec.ClusterDeploymentRef = nil
+			log.Info("Clusterdeployment doesn't exist, unset reference and reconcile again")
+			if err := r.Client.Update(ctx, acp); err != nil {
+				log.Error(err, "failed to updated agentcontrolplane to unreference clusterdeployment")
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{Requeue: true, RequeueAfter: 10 * time.Second}, nil
 		}
 	}
 
@@ -294,6 +312,7 @@ func (r *AgentControlPlaneReconciler) createClusterDeployment(ctx context.Contex
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *AgentControlPlaneReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	//TODO: maybe enqueue for clusterdeployment owned by this ACP?
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&controlplanev1beta1.AgentControlPlane{}).
 		Complete(r)
