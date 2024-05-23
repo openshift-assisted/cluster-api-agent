@@ -40,6 +40,9 @@ type AgentBootstrapConfigStatus struct {
 	// Important: Run "make" to regenerate code after modifying this file
 	ISODownloadURL string `json:"isoDownloadURL,omitempty"`
 
+	// AgentRef is the agent that this AgentBootstrapConfig is attached to
+	AgentRef *corev1.LocalObjectReference `json:"agentRef,omitempty"`
+
 	// Ready indicates the BootstrapData field is ready to be consumed
 	// +optional
 	Ready bool `json:"ready"`

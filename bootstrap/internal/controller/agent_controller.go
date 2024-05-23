@@ -3,6 +3,9 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
+
 	bmh_v1alpha1 "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
 	v1beta12 "github.com/metal3-io/cluster-api-provider-metal3/api/v1beta1"
 	"github.com/metal3-io/cluster-api-provider-metal3/baremetal"
@@ -15,8 +18,6 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strings"
-	"time"
 )
 
 const (
@@ -47,8 +48,17 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	if agent.Status.Progress.CurrentStage != "" {
+		log.Info("agent already started installing, skipping reconciliation", "name", agent.Name, "current stage", agent.Status.Progress.CurrentStage)
+		return ctrl.Result{}, nil
+	}
+	if agent.Spec.ClusterDeploymentName == nil {
+		log.Info("Agent is not attached to cluster deployment, ignoring")
+		return ctrl.Result{}, nil
+	}
 	clusterName, err := r.getClusterName(ctx, agent)
 	if err != nil {
+		log.Error(err, "unable to fetch ClusterDeployment agent is bound to")
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
@@ -57,6 +67,20 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		log.Error(err, "agentboostrapconfig not found for cluster", "cluster", clusterName)
 		return ctrl.Result{}, err
 	}
+
+	var abc *v1beta1.AgentBootstrapConfig
+	for _, agentbootstrapconfig := range agentBootstrapConfigList.Items {
+		if agentbootstrapconfig.Status.AgentRef != nil && agentbootstrapconfig.Status.AgentRef.Name == agent.Name {
+			log.Info("Found agentbootstrapconfig associated with this agent")
+			abc = &agentbootstrapconfig
+			break
+		}
+	}
+	if abc == nil {
+		log.Info("Agent not yet attached to agentbootstrapconfigs")
+		return ctrl.Result{Requeue: true, RequeueAfter: 20 * time.Second}, nil
+	}
+
 	if agent.Status.Inventory.Interfaces == nil {
 		log.Info("agent doesn't have interfaces yet", "agent name", agent.Name)
 		return ctrl.Result{RequeueAfter: retryAfter}, nil
