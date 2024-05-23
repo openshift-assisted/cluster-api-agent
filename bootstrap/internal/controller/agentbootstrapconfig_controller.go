@@ -19,10 +19,12 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
+
 	"github.com/openshift/assisted-service/api/hiveextension/v1beta1"
 	aimodels "github.com/openshift/assisted-service/models"
 	"github.com/pkg/errors"
-	"time"
 
 	hivev1 "github.com/openshift/hive/apis/hive/v1"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
@@ -32,8 +34,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	bmh_v1alpha1 "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
 	metal3 "github.com/metal3-io/cluster-api-provider-metal3/api/v1beta1"
+	"github.com/metal3-io/cluster-api-provider-metal3/baremetal"
 	bootstrapv1beta1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1beta1"
 	aiv1beta1 "github.com/openshift/assisted-service/api/v1beta1"
 	corev1 "k8s.io/api/core/v1"
@@ -109,19 +114,25 @@ func (r *AgentBootstrapConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	log := ctrl.LoggerFrom(ctx)
 
 	log.Info("Reconciling AgentBootstrapConfig")
-	defer (func() {
-		log.Info("Finished reconciling AgentBootstrapConfig")
-
-	})()
 
 	config := &bootstrapv1beta1.AgentBootstrapConfig{}
 	log.Info("Getting AgentBootstrapConfig", "namespacedname", req.NamespacedName)
 	if err := r.Client.Get(ctx, req.NamespacedName, config); err != nil {
 		if apierrors.IsNotFound(err) {
+			log.Info("agentbootstrapconfig not found, ending reconcile")
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
+	defer (func() {
+		if config != nil {
+			if rerr = r.Client.Status().Update(ctx, config); rerr != nil {
+				log.Error(rerr, "couldn't update AgentBootstrapConfig Status", "name", config.Name, "namespace", config.Namespace)
+			}
+		}
+		log.Info("Finished reconciling AgentBootstrapConfig")
+
+	})()
 	// Initialize the patch helper.
 	patchHelper, err := patch.NewHelper(config, r.Client)
 	if err != nil {
@@ -268,26 +279,70 @@ func (r *AgentBootstrapConfigReconciler) Reconcile(ctx context.Context, req ctrl
 		log.Info("Added ISO URLs to metal3 machines", "machine", metal3Machine.Name, "namespace", metal3Machine.Namespace)
 	}
 
-	// create secret
-	secret := &corev1.Secret{}
-	if err := r.Client.Get(ctx, client.ObjectKey{Namespace: config.Namespace, Name: config.Name}, secret); err != nil {
-		if !apierrors.IsNotFound(err) {
-			log.Error(err, "couldn't get secret", "name", config.Name, "namespace", config.Namespace)
-			return ctrl.Result{}, err
-		}
-		secret.Name = config.Name
-		secret.Namespace = config.Namespace
+	if !config.Status.Ready {
+		log.Info("AgentBootstrapConfig status is not ready, creating secret and setting to ready")
+		// create secret
+		secret := &corev1.Secret{}
+		if err := r.Client.Get(ctx, client.ObjectKey{Namespace: config.Namespace, Name: config.Name}, secret); err != nil {
+			if !apierrors.IsNotFound(err) {
+				log.Error(err, "couldn't get secret", "name", config.Name, "namespace", config.Namespace)
+				return ctrl.Result{}, err
+			}
+			secret.Name = config.Name
+			secret.Namespace = config.Namespace
 
-		if err := r.Client.Create(ctx, secret); err != nil {
-			log.Error(err, "couldn't create secret", "name", config.Name, "namespace", config.Namespace)
+			if err := r.Client.Create(ctx, secret); err != nil {
+				log.Error(err, "couldn't create secret", "name", config.Name, "namespace", config.Namespace)
+				return ctrl.Result{}, err
+			}
+		}
+
+		config.Status.Ready = true
+		config.Status.DataSecretName = &config.Name
+		conditions.MarkTrue(config, bootstrapv1beta1.DataSecretAvailableCondition)
+		return ctrl.Result{Requeue: true}, nil
+	}
+	if config.Status.AgentRef == nil {
+		log.Info("Finding agent for agentbootstrapconfig")
+		associatedBMH, ok := metal3Machine.Annotations[baremetal.HostAnnotation]
+		if !ok {
+			log.Info("Metal3Machine not yet associated with BMH")
+			return ctrl.Result{Requeue: true}, nil
+		}
+		bmhName := strings.Split(associatedBMH, "/")[1]
+		bmhNamespace := strings.Split(associatedBMH, "/")[0]
+		bmh := &bmh_v1alpha1.BareMetalHost{}
+		if err := r.Client.Get(ctx, types.NamespacedName{Name: bmhName, Namespace: bmhNamespace}, bmh); err != nil {
+			log.Error(err, "failed to get baremetal host associated with metal3machine", "bmh name", bmhName, "bmh namespace", bmhNamespace)
 			return ctrl.Result{}, err
 		}
+		agent, err := r.findAgent(ctx, bmh)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		log.Info("Found agent for agentbootstrapconfig")
+		config.Status.AgentRef = &corev1.LocalObjectReference{Name: agent.Name}
+		return ctrl.Result{Requeue: true, RequeueAfter: 10 * time.Second}, nil
 	}
 
-	config.Status.Ready = true
-	config.Status.DataSecretName = &config.Name
-	conditions.MarkTrue(config, bootstrapv1beta1.DataSecretAvailableCondition)
 	return ctrl.Result{}, rerr
+}
+
+func (r *AgentBootstrapConfigReconciler) findAgent(ctx context.Context, bmh *bmh_v1alpha1.BareMetalHost) (*aiv1beta1.Agent, error) {
+	log := log.FromContext(ctx)
+	agents := &aiv1beta1.AgentList{}
+	if err := r.Client.List(ctx, agents, &client.ListOptions{Namespace: bmh.Namespace}); err != nil {
+		log.Error(err, "failed to list agents in namespace", "namespace", bmh.Namespace)
+		return nil, err
+	}
+	for _, agent := range agents.Items {
+		for _, intf := range agent.Status.Inventory.Interfaces {
+			if intf.MacAddress != "" && intf.MacAddress == bmh.Spec.BootMACAddress {
+				return &agent, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("found %d agents, and none matched any MacAddress from the BMH %s interfaces", len(agents.Items), bmh.Spec.BootMACAddress)
 }
 
 func (r *AgentBootstrapConfigReconciler) isReferencingACI(clusterDeployment *hivev1.ClusterDeployment) bool {
