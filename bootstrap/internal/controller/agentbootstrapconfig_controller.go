@@ -318,13 +318,13 @@ func (r *AgentBootstrapConfigReconciler) Reconcile(ctx context.Context, req ctrl
 		}
 		agent, err := r.findAgent(ctx, bmh)
 		if err != nil {
-			return ctrl.Result{}, err
+			log.Error(err, "failed to find agent for agent bootstrapconfig")
+			return ctrl.Result{Requeue: true, RequeueAfter: 10 * time.Second}, err
 		}
-		log.Info("Found agent for agentbootstrapconfig")
+		log.Info("Found agent for agentbootstrapconfig", "agent name", agent.Name)
 		config.Status.AgentRef = &corev1.LocalObjectReference{Name: agent.Name}
 		return ctrl.Result{Requeue: true, RequeueAfter: 10 * time.Second}, nil
 	}
-
 	return ctrl.Result{}, rerr
 }
 
@@ -342,7 +342,7 @@ func (r *AgentBootstrapConfigReconciler) findAgent(ctx context.Context, bmh *bmh
 			}
 		}
 	}
-	return nil, fmt.Errorf("found %d agents, and none matched any MacAddress from the BMH %s interfaces", len(agents.Items), bmh.Spec.BootMACAddress)
+	return nil, fmt.Errorf("found %d agents, and none of the interfaces macAddresses matched the MacAddress from the BMH %s", len(agents.Items), bmh.Spec.BootMACAddress)
 }
 
 func (r *AgentBootstrapConfigReconciler) isReferencingACI(clusterDeployment *hivev1.ClusterDeployment) bool {
