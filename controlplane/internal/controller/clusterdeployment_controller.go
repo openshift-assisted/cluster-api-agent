@@ -252,6 +252,24 @@ func computeAgentClusterInstall(clusterDeployment *hivev1.ClusterDeployment, acp
 		serviceNetwork = cluster.Spec.ClusterNetwork.Services.CIDRBlocks
 	}
 
+	//aci.Annotations[InstallConfigOverrides] = `{\"capabilities\": {\"baselineCapabilitySet\": \"None\", \"additionalEnabledCapabilities\": [\"baremetal\",\"Console\",\"Insights\",\"OperatorLifecycleManager\"]}}"`
+	/*- openshift-samples
+	  - baremetal
+	  - marketplace
+	  - Console
+	  - Insights
+	  - Storage
+	  - CSISnapshot
+	  - NodeTuning
+	  - MachineAPI
+	  - Build
+	  - DeploymentConfig
+	  - ImageRegistry
+	  - OperatorLifecycleManager
+	  - CloudCredential
+	  - Ingress
+	  - CloudControllerManager
+	*/
 	aci := &hiveext.AgentClusterInstall{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      clusterDeployment.Name,
@@ -275,6 +293,15 @@ func computeAgentClusterInstall(clusterDeployment *hivev1.ClusterDeployment, acp
 				ServiceNetwork: serviceNetwork,
 			},
 		},
+	}
+	if len(acp.Spec.AgentConfigSpec.APIVIPs) > 0 && len(acp.Spec.AgentConfigSpec.IngressVIPs) > 0 {
+		aci.Spec.APIVIPs = acp.Spec.AgentConfigSpec.APIVIPs
+		aci.Spec.IngressVIPs = acp.Spec.AgentConfigSpec.IngressVIPs
+		aci.Spec.PlatformType = hiveext.PlatformType(v1.BareMetalPlatformType)
+		aci.Annotations = map[string]string{
+			//InstallConfigOverrides: `{\"capabilities\": {\"baselineCapabilitySet\": \"None\", \"additionalEnabledCapabilities\": [\"baremetal\",\"Console\",\"Insights\",\"OperatorLifecycleManager\"]}}"`,
+			InstallConfigOverrides: `{"capabilities": {"baselineCapabilitySet": "None", "additionalEnabledCapabilities": ["baremetal","Console","Insights","OperatorLifecycleManager","Ingress"]}}"`,
+		}
 	}
 	return aci
 }

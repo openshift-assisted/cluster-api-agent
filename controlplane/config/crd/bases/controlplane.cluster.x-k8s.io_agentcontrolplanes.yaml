@@ -224,6 +224,16 @@ spec:
               agentConfigSpec:
                 description: AgentConfigSpec specs for the AgentConfig
                 properties:
+                  apiVIPs:
+                    description: |-
+                      APIVIPs are the virtual IPs used to reach the OpenShift cluster's API.
+                      Enter one IP address for single-stack clusters, or up to two for dual-stack clusters (at
+                      most one IP address per IP stack used). The order of stacks should be the same as order
+                      of subnets in Cluster Networks, Service Networks, and Machine Networks.
+                    items:
+                      type: string
+                    maxItems: 2
+                    type: array
                   baseDomain:
                     description: BaseDomain is the base domain to which the cluster
                       should belong.
@@ -260,6 +270,16 @@ spec:
                           regarding tang's configuration
                         type: string
                     type: object
+                  ingressVIPs:
+                    description: |-
+                      IngressVIPs are the virtual IPs used for cluster ingress traffic.
+                      Enter one IP address for single-stack clusters, or up to two for dual-stack clusters (at
+                      most one IP address per IP stack used). The order of stacks should be the same as order
+                      of subnets in Cluster Networks, Service Networks, and Machine Networks.
+                    items:
+                      type: string
+                    maxItems: 2
+                    type: array
                   manifestsConfigMapRefs:
                     description: |-
                       ManifestsConfigMapRefs is an array of references to user-provided manifests ConfigMaps to
