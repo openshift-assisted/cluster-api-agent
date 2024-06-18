@@ -156,8 +156,17 @@ rules:
   - metal3machines
   - metal3machines/status
   verbs:
-  - create
-  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - infrastructure.cluster.x-k8s.io
+  resources:
+  - metal3machinetemplates
+  - metal3machinetemplates/status
+  verbs:
   - get
   - list
   - patch
