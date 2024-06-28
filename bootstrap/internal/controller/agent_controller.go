@@ -8,6 +8,8 @@ import (
 
 	"github.com/pkg/errors"
 
+	"github.com/openshift-assisted/cluster-api-agent/bootstrap/internal/ignition"
+
 	metal3v1alpha1 "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
 	metal3 "github.com/metal3-io/cluster-api-provider-metal3/api/v1beta1"
 	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1alpha1"
@@ -75,11 +77,23 @@ func (r *AgentReconciler) setAgentFields(ctx context.Context, agent *aiv1beta1.A
 	if _, ok := machine.Labels[clusterv1.MachineControlPlaneLabel]; ok {
 		role = models.HostRoleMaster
 	}
+
+	ignitionConfigOverrides, err := getIgnitionConfig()
+	if err != nil {
+		return err
+	}
+
 	agent.Spec.NodeLabels = map[string]string{metal3ProviderIDLabelKey: getProviderID(bmh)}
 	agent.Spec.Role = role
-	agent.Spec.IgnitionConfigOverrides = getIgnitionConfigOverride()
+	agent.Spec.IgnitionConfigOverrides = ignitionConfigOverrides
 	agent.Spec.Approved = true
 	return r.Client.Update(ctx, agent)
+}
+
+func getIgnitionConfig() (string, error) {
+	capiSuccessFile := ignition.CreateIgnitionFile("/run/cluster-api/bootstrap-success.complete",
+		"root", "data:text/plain;charset=utf-8;base64,c3VjY2Vzcw==", 420, true)
+	return ignition.GetIgnitionConfigOverrides(capiSuccessFile)
 }
 
 func (r *AgentReconciler) ensureBootstrapConfigReference(ctx context.Context, machine *clusterv1.Machine, agentName string) error {
@@ -110,25 +124,6 @@ func (r *AgentReconciler) ensureBootstrapConfigReference(ctx context.Context, ma
 
 func getProviderID(bmh *metal3v1alpha1.BareMetalHost) string {
 	return string(bmh.GetUID())
-}
-
-func getIgnitionConfigOverride() string {
-	ignition := `{
-				"ignition": { "version": "3.1.0" },
-				"storage": {
-                  "files": [
-					  {
-		                "path": "/run/cluster-api/bootstrap-success.complete",
-				        "mode": 420,
-				        "contents": {
-							"source": "data:text/plain;charset=utf-8;base64,c3VjY2Vzcw=="
-						}
-				      }
-			      ]
-				}
-}
-`
-	return ignition
 }
 
 func (r *AgentReconciler) getMachineFromBMH(
