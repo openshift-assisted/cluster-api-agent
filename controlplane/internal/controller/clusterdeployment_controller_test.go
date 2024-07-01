@@ -44,7 +44,7 @@ const (
 	clusterName           = "test-cluster"
 )
 
-var _ = Describe("AgentClusterInstall Controller", func() {
+var _ = Describe("ClusterDeployment Controller", func() {
 	ctx := context.Background()
 	var controllerReconciler *ClusterDeploymentReconciler
 	var k8sClient client.Client
@@ -78,7 +78,7 @@ var _ = Describe("AgentClusterInstall Controller", func() {
 		})
 	})
 
-	When("A cluster deployment with AgentControlPlanes in the same namespace, but none referecing it", func() {
+	When("A cluster deployment with AgentControlPlanes in the same namespace, but none referencing it", func() {
 		It("should not return error", func() {
 			cd := utils.NewClusterDeployment(namespace, clusterDeploymentName)
 			Expect(k8sClient.Create(ctx, cd)).To(Succeed())
@@ -116,9 +116,11 @@ var _ = Describe("AgentClusterInstall Controller", func() {
 			acp.Spec.AgentConfigSpec.MastersSchedulable = true
 
 			Expect(controllerutil.SetOwnerReference(cluster, acp, testScheme)).To(Succeed())
+			Expect(controllerutil.SetOwnerReference(acp, cd, testScheme)).To(Succeed())
 			ref, _ := reference.GetReference(testScheme, cd)
 			acp.Status.ClusterDeploymentRef = ref
 			Expect(k8sClient.Create(ctx, acp)).To(Succeed())
+			Expect(k8sClient.Update(ctx, cd)).To(Succeed())
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: client.ObjectKeyFromObject(cd),

@@ -18,12 +18,11 @@ package controller
 
 import (
 	"context"
-	"time"
 
-	"github.com/openshift-assisted/cluster-api-agent/util"
-
-	"github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha1"
+	controlplanev1alpha1 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha1"
 	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/imageregistry"
+	"github.com/openshift-assisted/cluster-api-agent/util"
+	logutil "github.com/openshift-assisted/cluster-api-agent/util/log"
 	configv1 "github.com/openshift/api/config/v1"
 	hiveext "github.com/openshift/assisted-service/api/hiveextension/v1beta1"
 	aiv1beta1 "github.com/openshift/assisted-service/api/v1beta1"
@@ -36,7 +35,6 @@ import (
 	capiutil "sigs.k8s.io/cluster-api/util"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 )
 
@@ -54,127 +52,87 @@ type ClusterDeploymentReconciler struct {
 func (r *ClusterDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&hivev1.ClusterDeployment{}).
-		Watches(&v1alpha1.AgentControlPlane{}, &handler.EnqueueRequestForObject{}).
+		Watches(&controlplanev1alpha1.AgentControlPlane{}, &handler.EnqueueRequestForObject{}).
 		Watches(&clusterv1.MachineDeployment{}, &handler.EnqueueRequestForObject{}).
 		Complete(r)
 }
+
 func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := ctrl.LoggerFrom(ctx)
 
 	clusterDeployment := &hivev1.ClusterDeployment{}
 	if err := r.Client.Get(ctx, req.NamespacedName, clusterDeployment); err != nil {
-		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, nil
-		}
-		return ctrl.Result{}, err
+		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	log.Info("Reconciling ClusterDeployment", "name", clusterDeployment.Name, "namespace", clusterDeployment.Namespace)
+	log.WithValues("cluster_deployment", clusterDeployment.Name, "cluster_deployment_namespace", clusterDeployment.Namespace)
+	log.V(logutil.TraceLevel).Info("Reconciling ClusterDeployment")
 
-	agentCPList := &v1alpha1.AgentControlPlaneList{}
-	if err := r.Client.List(ctx, agentCPList, client.InNamespace(clusterDeployment.Namespace)); err != nil {
-		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, nil
-		}
-		return ctrl.Result{}, err
+	acp := controlplanev1alpha1.AgentControlPlane{}
+	if err := util.GetTypedOwner(ctx, r.Client, clusterDeployment, &acp); err != nil {
+		log.V(logutil.TraceLevel).Info("Cluster deployment is not owned by AgentControlPlane")
+		return ctrl.Result{}, nil
 	}
-	log.Info("found agentcontrolplane", "num", len(agentCPList.Items))
+	log.WithValues("agent_control_plane", acp.Name, "agent_controlplane_namespace", acp.Namespace)
 
-	if len(agentCPList.Items) == 0 {
+	if clusterDeployment.Spec.ClusterInstallRef != nil && r.agentClusterInstallExists(ctx, clusterDeployment.Spec.ClusterInstallRef.Name, clusterDeployment.Namespace) {
+		log.V(logutil.TraceLevel).Info(
+			"skipping reconciliation: cluster deployment already has a referenced agent cluster install",
+			"agent_cluster_install", clusterDeployment.Spec.ClusterInstallRef.Name,
+		)
 		return ctrl.Result{}, nil
 	}
 
-	for _, acp := range agentCPList.Items {
-		if IsAgentControlPlaneReferencingClusterDeployment(acp, clusterDeployment) {
-			log.Info("ClusterDeployment is referenced by AgentControlPlane")
-			return r.ensureAgentClusterInstall(ctx, clusterDeployment, acp)
-		}
-	}
-
-	return ctrl.Result{}, nil
+	return r.ensureAgentClusterInstall(ctx, clusterDeployment, acp)
 }
 
-func IsAgentControlPlaneReferencingClusterDeployment(
-	agentCP v1alpha1.AgentControlPlane,
-	clusterDeployment *hivev1.ClusterDeployment,
-) bool {
-	return agentCP.Status.ClusterDeploymentRef != nil &&
-		agentCP.Status.ClusterDeploymentRef.GroupVersionKind().
-			String() ==
-			hivev1.SchemeGroupVersion.WithKind("ClusterDeployment").
-				String() &&
-		agentCP.Status.ClusterDeploymentRef.Namespace == clusterDeployment.Namespace &&
-		agentCP.Status.ClusterDeploymentRef.Name == clusterDeployment.Name
+func (r *ClusterDeploymentReconciler) agentClusterInstallExists(ctx context.Context, agentClusterInstallName, namespace string) bool {
+	agentclusterinstall := &hiveext.AgentClusterInstall{}
+	err := r.Client.Get(ctx, client.ObjectKey{Name: agentClusterInstallName, Namespace: namespace}, agentclusterinstall)
+	return err != nil
 }
 
 func (r *ClusterDeploymentReconciler) ensureAgentClusterInstall(
 	ctx context.Context,
 	clusterDeployment *hivev1.ClusterDeployment,
-	acp v1alpha1.AgentControlPlane,
+	acp controlplanev1alpha1.AgentControlPlane,
 ) (ctrl.Result, error) {
 	log := ctrl.LoggerFrom(ctx)
-	log.Info(
-		"No agentcontrolplane is referenced by ClusterDeployment",
-		"name",
-		clusterDeployment.Name,
-		"namespace",
-		clusterDeployment.Namespace,
-	)
 
 	cluster, err := capiutil.GetOwnerCluster(ctx, r.Client, acp.ObjectMeta)
 	if err != nil {
-		log.Error(
-			err,
-			"failed to retrieve owner Cluster from the API Server",
-			"agentcontrolplane name",
-			acp.Name,
-			"agentcontrolplane namespace",
-			acp.Namespace,
-		)
+		log.Error(err, "failed to retrieve owner Cluster from the API Server")
 		return ctrl.Result{}, err
-	}
-	if cluster == nil {
-		log.Info("Cluster Controller has not yet set OwnerRef")
-		return ctrl.Result{Requeue: true, RequeueAfter: 10 * time.Second}, nil
 	}
 
 	imageSet, err := r.createOrUpdateClusterImageSet(ctx, clusterDeployment.Name, acp.Spec.AgentConfigSpec.ReleaseImage)
 	if err != nil {
+		log.Error(err, "failed creating ClusterImageSet")
 		return ctrl.Result{}, err
 	}
-	if imageSet == nil {
-		return ctrl.Result{Requeue: true, RequeueAfter: 10 * time.Second}, nil
-	}
+
 	workerNodes := r.getWorkerNodesCount(ctx, cluster)
-	aci, err := r.createOrUpdateAgentClusterInstall(ctx, clusterDeployment, acp, cluster, imageSet, workerNodes)
+	aci, err := r.computeAgentClusterInstall(ctx, clusterDeployment, acp, imageSet, cluster, workerNodes)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if aci == nil {
-		return ctrl.Result{Requeue: true, RequeueAfter: 10 * time.Second}, nil
-	}
-	if clusterDeployment.Spec.ClusterInstallRef != nil {
-		log.Info(
-			"skipping reconciliation: cluster deployment already has a referenced agent cluster install",
-			"cluster_deployment_name", clusterDeployment.Name,
-			"cluster_deployment_namespace", clusterDeployment.Namespace,
-			"agent_cluster_install", clusterDeployment.Spec.ClusterInstallRef.Name,
-		)
-		return ctrl.Result{}, nil
-	}
-	err = r.updateClusterDeploymentRef(ctx, clusterDeployment, aci)
 
-	return ctrl.Result{}, err
+	if err := r.createOrUpdateAgentClusterInstall(ctx, aci); err != nil {
+		log.Error(err, "failed creating AgentClusterInstall")
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{}, r.updateClusterDeploymentRef(ctx, clusterDeployment, aci)
 }
 
 func (r *ClusterDeploymentReconciler) getWorkerNodesCount(ctx context.Context, cluster *clusterv1.Cluster) int {
 	log := ctrl.LoggerFrom(ctx)
+	count := 0
 
 	mdList := clusterv1.MachineDeploymentList{}
 	if err := r.Client.List(ctx, &mdList, client.MatchingLabels{clusterv1.ClusterNameLabel: cluster.Name}); err != nil {
 		log.Error(err, "failed to list MachineDeployments", "cluster", cluster.Name)
-		return 0
+		return count
 	}
-	count := 0
+
 	for _, md := range mdList.Items {
 		count += int(*md.Spec.Replicas)
 	}
@@ -193,23 +151,15 @@ func (r *ClusterDeploymentReconciler) updateClusterDeploymentRef(
 		Name:    aci.Name,
 	}
 	return r.Client.Update(ctx, cd)
-
 }
 
 func (r *ClusterDeploymentReconciler) createOrUpdateClusterImageSet(
 	ctx context.Context,
 	imageSetName, releaseImage string,
 ) (*hivev1.ClusterImageSet, error) {
-	log := ctrl.LoggerFrom(ctx)
-
 	imageSet := computeClusterImageSet(imageSetName, releaseImage)
-	if _, err := ctrl.CreateOrUpdate(ctx, r.Client, imageSet, func() error { return nil }); err != nil {
-		if !apierrors.IsAlreadyExists(err) {
-			log.Info("failed to retrieve ImageSet", "name", imageSetName)
-			return nil, err
-		}
-	}
-	return imageSet, nil
+	_, err := ctrl.CreateOrUpdate(ctx, r.Client, imageSet, func() error { return nil })
+	return imageSet, client.IgnoreAlreadyExists(err)
 }
 
 func computeClusterImageSet(imageSetName string, releaseImage string) *hivev1.ClusterImageSet {
@@ -225,36 +175,17 @@ func computeClusterImageSet(imageSetName string, releaseImage string) *hivev1.Cl
 
 func (r *ClusterDeploymentReconciler) createOrUpdateAgentClusterInstall(
 	ctx context.Context,
-	clusterDeployment *hivev1.ClusterDeployment,
-	acp v1alpha1.AgentControlPlane,
-	cluster *clusterv1.Cluster,
-	imageSet *hivev1.ClusterImageSet,
-	workerNodes int,
-) (*hiveext.AgentClusterInstall, error) {
-	log := ctrl.LoggerFrom(ctx)
-	aci, err := r.computeAgentClusterInstall(ctx, clusterDeployment, acp, imageSet, cluster, workerNodes)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := ctrl.CreateOrUpdate(ctx, r.Client, aci, func() error { return nil }); err != nil {
-		if !apierrors.IsAlreadyExists(err) {
-			log.Info(
-				"failed to create agent cluster install for ClusterDeployment",
-				"name",
-				clusterDeployment.Name,
-				"namespace",
-				clusterDeployment.Namespace,
-			)
-			return nil, err
-		}
-	}
-	return aci, nil
+	aci *hiveext.AgentClusterInstall,
+) error {
+	_, err := ctrl.CreateOrUpdate(ctx, r.Client, aci, func() error { return nil })
+	return client.IgnoreAlreadyExists(err)
+
 }
 
 func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
 	ctx context.Context,
 	clusterDeployment *hivev1.ClusterDeployment,
-	acp v1alpha1.AgentControlPlane,
+	acp controlplanev1alpha1.AgentControlPlane,
 	imageSet *hivev1.ClusterImageSet,
 	cluster *clusterv1.Cluster,
 	workerReplicas int,
@@ -277,23 +208,11 @@ func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
 	}
 
 	if acp.Spec.AgentConfigSpec.ImageRegistryRef != nil {
-		registryConfigmap := &corev1.ConfigMap{}
-		if err := r.Client.Get(ctx, client.ObjectKey{Name: acp.Spec.AgentConfigSpec.ImageRegistryRef.Name, Namespace: acp.Namespace}, registryConfigmap); err != nil {
-			return nil, err
-		}
-
-		spokeImageRegistryConfigmap, err := imageregistry.CreateImageRegistryConfigmap(registryConfigmap, acp.Namespace)
-		if err != nil {
-			return nil, err
-		}
-
-		_ = controllerutil.SetOwnerReference(&acp, spokeImageRegistryConfigmap, r.Scheme)
-
-		if _, err := ctrl.CreateOrUpdate(ctx, r.Client, spokeImageRegistryConfigmap, func() error { return nil }); err != nil && !apierrors.IsAlreadyExists(err) {
+		if err := r.createImageRegistry(ctx, acp.Spec.AgentConfigSpec.ImageRegistryRef.Name, acp.Namespace); err != nil {
 			log.Error(err, "failed to create image registry config manifest")
 			return nil, err
 		}
-		additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: spokeImageRegistryConfigmap.Name})
+		additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: imageregistry.ImageConfigMapName})
 	}
 
 	aci := &hiveext.AgentClusterInstall{
@@ -305,7 +224,7 @@ func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
 				clusterDeployment.Labels[clusterv1.ClusterNameLabel],
 			),
 			OwnerReferences: []metav1.OwnerReference{
-				*metav1.NewControllerRef(&acp, v1alpha1.GroupVersion.WithKind(agentControlPlaneKind)),
+				*metav1.NewControllerRef(&acp, controlplanev1alpha1.GroupVersion.WithKind(agentControlPlaneKind)),
 			},
 		},
 		Spec: hiveext.AgentClusterInstallSpec{
@@ -328,4 +247,21 @@ func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
 		},
 	}
 	return aci, nil
+}
+
+func (r *ClusterDeploymentReconciler) createImageRegistry(ctx context.Context, registryName, registryNamespace string) error {
+	registryConfigmap := &corev1.ConfigMap{}
+	if err := r.Client.Get(ctx, client.ObjectKey{Name: registryName, Namespace: registryNamespace}, registryConfigmap); err != nil {
+		return err
+	}
+
+	spokeImageRegistryConfigmap, err := imageregistry.GenerateImageRegistryConfigmap(registryConfigmap, registryNamespace)
+	if err != nil {
+		return err
+	}
+
+	if _, err := ctrl.CreateOrUpdate(ctx, r.Client, spokeImageRegistryConfigmap, func() error { return nil }); err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+	return nil
 }
