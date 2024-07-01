@@ -88,13 +88,9 @@ func (r *AgentBootstrapConfigReconciler) Reconcile(ctx context.Context, req ctrl
 
 	config := &bootstrapv1alpha1.AgentBootstrapConfig{}
 	if err := r.Client.Get(ctx, req.NamespacedName, config); err != nil {
-		if apierrors.IsNotFound(err) {
-			log.V(logutil.TraceLevel).Info("agentBootstrapConfig not found", "namespacedname", req.NamespacedName)
-			return ctrl.Result{}, nil
-		}
-		return ctrl.Result{}, err
+		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	log.WithValues("agentBootstrapConfig Name", config.Name, "agentBootstrapConfig Namespace", config.Namespace)
+	log.WithValues("agent_bootstrap_config", config.Name, "agent_bootstrap_config_namespace", config.Namespace)
 
 	// Initialize the patch helper.
 	patchHelper, err := patch.NewHelper(config, r.Client)

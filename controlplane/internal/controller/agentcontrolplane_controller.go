@@ -89,13 +89,10 @@ func (r *AgentControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	acp := &controlplanev1alpha1.AgentControlPlane{}
 	if err := r.Client.Get(ctx, req.NamespacedName, acp); err != nil {
-		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, nil
-		}
-		return ctrl.Result{}, err
+		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	log.WithValues("AgentControlPlane Name", acp.Name, "AgentControlPlane Namespace", acp.Namespace)
+	log.WithValues("agent_control_plane", acp.Name, "agent_control_plane_namespace", acp.Namespace)
 	log.V(logutil.TraceLevel).Info("Started reconciling AgentControlPlane")
 
 	// Initialize the patch helper.

@@ -59,18 +59,15 @@ func (r *AgentClusterInstallReconciler) Reconcile(ctx context.Context, req ctrl.
 	log.V(logutil.TraceLevel).Info("Agent Cluster Install Reconcile started")
 	aci := &hiveext.AgentClusterInstall{}
 	if err := r.Client.Get(ctx, req.NamespacedName, aci); err != nil {
-		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, nil
-		}
-		return ctrl.Result{}, err
+		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	log.WithValues("AgentClusterInstall Name", aci.Name, "AgentClusterInstall Namespace", aci.Namespace)
+	log.WithValues("agent_cluster_install", aci.Name, "agent_cluster_install_namespace", aci.Namespace)
 
 	acp := controlplanev1alpha1.AgentControlPlane{}
 	if err := util.GetTypedOwner(ctx, r.Client, aci, &acp); err != nil {
 		return ctrl.Result{}, err
 	}
-	log.WithValues("AgentControlPlane Name", acp.Name, "AgentControlPlane Namespace", acp.Namespace)
+	log.WithValues("agent_control_plane", acp.Name, "agent_control_plane_namespace", acp.Namespace)
 
 	if err := r.reconcile(ctx, aci, &acp); err != nil {
 		return ctrl.Result{}, err
