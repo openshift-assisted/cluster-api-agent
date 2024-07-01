@@ -6,17 +6,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pkg/errors"
+
 	metal3v1alpha1 "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
 	metal3 "github.com/metal3-io/cluster-api-provider-metal3/api/v1beta1"
-	"github.com/metal3-io/cluster-api-provider-metal3/baremetal"
 	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1alpha1"
+	"github.com/openshift-assisted/cluster-api-agent/util"
 	logutil "github.com/openshift-assisted/cluster-api-agent/util/log"
 	aiv1beta1 "github.com/openshift/assisted-service/api/v1beta1"
 	"github.com/openshift/assisted-service/models"
-	hivev1 "github.com/openshift/hive/apis/hive/v1"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -40,126 +41,76 @@ func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// +kubebuilder:rbac:groups=extensions.hive.openshift.io,resources=agentclusterinstalls;agentclusterinstalls/status,verbs=get;watch
-// +kubebuilder:rbac:groups=extensions.hive.openshift.io,resources=agentclusterinstalls/status,verbs=get
-// +kubebuilder:rbac:groups=agent-install.openshift.io,resources=agents,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=agent-install.openshift.io,resources=agents/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=hive.openshift.io,resources=clusterdeployments,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machines;machines/status,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=metal3machines;metal3machines/status,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=metal3machinetemplates;metal3machinetemplates/status,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=agent-install.openshift.io,resources=infraenvs,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=agent-install.openshift.io,resources=infraenvs/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=agent-install.openshift.io,resources=agents,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=agent-install.openshift.io,resources=agents/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=metal3.io,resources=baremetalhosts,verbs=get;list;watch;update;patch
-// +kubebuilder:rbac:groups=controlplane.cluster.x-k8s.io,resources=agentcontrolplanes,verbs=get;list;watch;
-// +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machinedeployments;machinedeployments/status,verbs=get;list;watch;
-
 // Reconciles Agent resource
 func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := ctrl.LoggerFrom(ctx)
-
 	agent := &aiv1beta1.Agent{}
-	err := r.Get(ctx, req.NamespacedName, agent)
-	if err != nil {
+	if err := r.Get(ctx, req.NamespacedName, agent); err != nil {
 		log.Error(err, "unable to fetch Agent")
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	log.WithValues("agent", agent.Name, "agent_namespace", agent.Namespace)
 
-	clusterName, err := r.getClusterName(ctx, agent)
-	if err != nil || clusterName == "" {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+	bmh, err := r.findBMH(ctx, agent)
+	if err != nil {
+		log.Error(err, "can't find BMH for agent")
+		return ctrl.Result{}, err
 	}
 
-	if agent.Status.Inventory.Interfaces == nil {
-		log.Info("agent doesn't have interfaces yet", "agent name", agent.Name)
+	machine, err := r.getMachineFromBMH(ctx, bmh)
+	if err != nil {
+		log.Error(err, "can't find machine for agent")
+		return ctrl.Result{}, err
+	}
+
+	if machine.Spec.Bootstrap.ConfigRef == nil {
+		log.V(logutil.TraceLevel).Info("agent doesn't belong to CAPI cluster")
 		return ctrl.Result{}, nil
 	}
 
-	bmh, err := r.getBMHFromAgent(ctx, agent)
-	if err != nil {
-		log.Error(err, "can't get bmhs for agent", "cluster", clusterName)
-		return ctrl.Result{}, err
-	}
-	if bmh == nil {
-		return ctrl.Result{RequeueAfter: retryAfter}, nil
-	}
-	machine, err := r.getMachineFromBMH(ctx, bmh)
-	if err != nil {
-		log.Error(err, "can't get bmhs for agent", "cluster", bmh)
+	if err := r.ensureBootstrapConfigReference(ctx, machine, agent.Name); err != nil {
+		log.Error(err, "failed to ensure Agent Bootstrap Config references this agent")
 		return ctrl.Result{}, err
 	}
 
-	agent.Spec.NodeLabels = map[string]string{metal3ProviderIDLabelKey: getProviderID(bmh)}
-	if machine.Spec.Bootstrap.ConfigRef == nil {
-		log.V(logutil.TraceLevel).Info("Agent's machine not associated with agent bootstrap config")
-		return ctrl.Result{}, fmt.Errorf(
-			"machine %s/%s does not have any bootstrap config ref",
-			machine.Namespace,
-			machine.Name,
-		)
-	}
+	return ctrl.Result{}, r.setAgentFields(ctx, agent, bmh, machine)
+}
 
-	config := &bootstrapv1alpha1.AgentBootstrapConfig{}
-	if err := r.Client.Get(ctx, client.ObjectKey{Name: machine.Spec.Bootstrap.ConfigRef.Name, Namespace: machine.Spec.Bootstrap.ConfigRef.Namespace}, config); err != nil {
-		log.V(logutil.TraceLevel).Info("Failed getting agent's agent bootstrap config")
-		return ctrl.Result{}, err
-	}
-
-	if config.Status.AgentRef == nil {
-		config.Status.AgentRef = &corev1.LocalObjectReference{Name: agent.Name}
-		// Set this agent as a ref on the agent bootstrap config
-		if err := r.Client.Status().Update(ctx, config); err != nil {
-			log.Error(err, "failed to set this agent as the agent ref on agent bootstrap config")
-			return ctrl.Result{}, err
-		}
-	}
-
+func (r *AgentReconciler) setAgentFields(ctx context.Context, agent *aiv1beta1.Agent, bmh *metal3v1alpha1.BareMetalHost, machine *clusterv1.Machine) error {
 	role := models.HostRoleWorker
 	if _, ok := machine.Labels[clusterv1.MachineControlPlaneLabel]; ok {
 		role = models.HostRoleMaster
 	}
-	log.Info("setting role to agent", "role", role)
-	// TODO: skip if installing
-
+	agent.Spec.NodeLabels = map[string]string{metal3ProviderIDLabelKey: getProviderID(bmh)}
 	agent.Spec.Role = role
-	agent.Spec.IgnitionConfigOverrides = getIngitionConfigOverride()
+	agent.Spec.IgnitionConfigOverrides = getIgnitionConfigOverride()
 	agent.Spec.Approved = true
-	if err := r.Client.Update(ctx, agent); err != nil {
-		log.Error(err, "couldn't update agent", "name", agent.Name, "namespace", agent.Namespace)
-		return ctrl.Result{}, err
+	return r.Client.Update(ctx, agent)
+}
+
+func (r *AgentReconciler) ensureBootstrapConfigReference(ctx context.Context, machine *clusterv1.Machine, agentName string) error {
+	config := &bootstrapv1alpha1.AgentBootstrapConfig{}
+	if err := r.Client.Get(ctx,
+		client.ObjectKey{
+			Name:      machine.Spec.Bootstrap.ConfigRef.Name,
+			Namespace: machine.Spec.Bootstrap.ConfigRef.Namespace},
+		config); err != nil {
+		return err
 	}
-	return ctrl.Result{}, nil
+
+	if config.Status.AgentRef == nil {
+		config.Status.AgentRef = &corev1.LocalObjectReference{Name: agentName}
+		// Set this agent as a ref on the agent bootstrap config
+		return r.Client.Status().Update(ctx, config)
+	}
+	return nil
 }
 
 func getProviderID(bmh *metal3v1alpha1.BareMetalHost) string {
 	return string(bmh.GetUID())
 }
 
-func (r *AgentReconciler) getClusterName(ctx context.Context, agent *aiv1beta1.Agent) (string, error) {
-	if agent.Spec.ClusterDeploymentName == nil {
-		return "", nil
-	}
-	// if we find an agent, we must ensure it is controlled by our provider
-	clusterDeploymentKey := client.ObjectKey{
-		Namespace: agent.Spec.ClusterDeploymentName.Namespace,
-		Name:      agent.Spec.ClusterDeploymentName.Name,
-	}
-	clusterDeployment := &hivev1.ClusterDeployment{}
-	if err := r.Client.Get(ctx, clusterDeploymentKey, clusterDeployment); err != nil {
-		return "", err
-	}
-
-	clusterName, ok := clusterDeployment.Labels[clusterv1.ClusterNameLabel]
-	if !ok {
-		return "", fmt.Errorf("clusterdeployment %s does not belong to a CAPI cluster", clusterDeployment.Name)
-	}
-	return clusterName, nil
-}
-
-func getIngitionConfigOverride() string {
+func getIgnitionConfigOverride() string {
 	ignition := `{
 				"ignition": { "version": "3.1.0" },
 				"storage": {
@@ -182,80 +133,30 @@ func (r *AgentReconciler) getMachineFromBMH(
 	ctx context.Context,
 	bmh *metal3v1alpha1.BareMetalHost,
 ) (*clusterv1.Machine, error) {
-	m3machine, err := r.getMetal3MachineFromBMH(ctx, bmh)
-	if err != nil {
+	metal3Machine := &metal3.Metal3Machine{}
+	if err := util.GetTypedOwner(ctx, r.Client, bmh, metal3Machine); err != nil {
 		return nil, err
 	}
-	return r.getMachineFromMetal3Machine(ctx, m3machine)
-}
-
-func (r *AgentReconciler) getMachineFromMetal3Machine(
-	ctx context.Context,
-	m3machine *metal3.Metal3Machine,
-) (*clusterv1.Machine, error) {
-	log := ctrl.LoggerFrom(ctx)
-
-	machine := clusterv1.Machine{}
-	for _, ref := range m3machine.OwnerReferences {
-		log.Info(
-			"comparing owner to machine",
-			"refKind",
-			ref.Kind,
-			"refAPIVersion",
-			ref.APIVersion,
-			"machineKind",
-			machine.Kind,
-			"machineAPIversion",
-			machine.APIVersion,
-		)
-		// TODO: set it as constant
-		if ref.Kind == "Machine" && ref.APIVersion == clusterv1.GroupVersion.String() {
-			if err := r.Client.Get(ctx, types.NamespacedName{
-				Namespace: m3machine.Namespace,
-				Name:      ref.Name,
-			},
-				&machine); err != nil {
-				return nil, err
-			}
-			return &machine, nil
-		}
-	}
-	return nil, fmt.Errorf("no machine found for metal3machine %s/%s", m3machine.Namespace, m3machine.Name)
-}
-
-func (r *AgentReconciler) getMetal3MachineFromBMH(
-	ctx context.Context,
-	bmh *metal3v1alpha1.BareMetalHost,
-) (*metal3.Metal3Machine, error) {
-	ml := metal3.Metal3MachineList{}
-	if err := r.Client.List(ctx, &ml); err != nil {
+	machine := &clusterv1.Machine{}
+	if err := util.GetTypedOwner(ctx, r.Client, metal3Machine, machine); err != nil {
 		return nil, err
 	}
-	for _, m := range ml.Items {
-		annotation, ok := m.Annotations[baremetal.HostAnnotation]
-		if !ok {
-			continue
-		}
-		parts := strings.Split(annotation, "/")
-		if len(parts) < 2 {
-			continue
-		}
-		if bmh.Namespace == parts[0] && bmh.Name == parts[1] {
-			return &m, nil
-		}
-	}
-
-	return nil, fmt.Errorf("found %d metal3machines, none matching BMH %s/%s", len(ml.Items), bmh.Namespace, bmh.Name)
+	return machine, nil
 }
 
-func (r *AgentReconciler) getBMHFromAgent(
+func (r *AgentReconciler) findBMH(
 	ctx context.Context,
 	agent *aiv1beta1.Agent,
 ) (*metal3v1alpha1.BareMetalHost, error) {
+	if agent.Status.Inventory.Interfaces == nil {
+		return nil, errors.New("agent doesn't have inventory yet")
+	}
+
 	bmhs := &metal3v1alpha1.BareMetalHostList{}
 	if err := r.Client.List(ctx, bmhs); err != nil {
 		return nil, err
 	}
+
 	for _, bmh := range bmhs.Items {
 		for _, agentInterface := range agent.Status.Inventory.Interfaces {
 			if agentInterface.MacAddress != "" &&
@@ -266,7 +167,7 @@ func (r *AgentReconciler) getBMHFromAgent(
 	}
 
 	return nil, fmt.Errorf(
-		"found %d BMHs, and none matched any MacAddress from the agent's %d interfaces",
+		"found %d BMHs, but none matched any of the MacAddresses from the agent's %d interfaces",
 		len(bmhs.Items),
 		len(agent.Status.Inventory.Interfaces),
 	)
