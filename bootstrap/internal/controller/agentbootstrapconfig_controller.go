@@ -76,7 +76,8 @@ type AgentBootstrapConfigReconciler struct {
 // +kubebuilder:rbac:groups=agent-install.openshift.io,resources=agents/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=metal3.io,resources=baremetalhosts,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=controlplane.cluster.x-k8s.io,resources=agentcontrolplanes,verbs=get;list;watch;
-//+kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machinedeployments;machinedeployments/status,verbs=get;list;watch;
+// +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machinedeployments;machinedeployments/status,verbs=get;list;watch;
+// +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machinesets;machinesets/status,verbs=get;list;watch;
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -170,7 +171,7 @@ func (r *AgentBootstrapConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 
 	// if added worker after start install, will be treated as day2
-	if !util.IsControlPlaneMachine(machine) && !(aci.Status.DebugInfo.State == aimodels.ClusterStatusAddingHosts || aci.Status.DebugInfo.State == aimodels.ClusterStatusPendingForInput || aci.Status.DebugInfo.State == aimodels.ClusterStatusInsufficient || aci.Status.DebugInfo.State == "") {
+	if isInstalling(machine, aci.Status.DebugInfo.State) {
 		log.V(logutil.DebugLevel).Info("not controlplane machine and installation already started, requeuing")
 
 		return ctrl.Result{Requeue: true, RequeueAfter: 60 * time.Second}, nil
@@ -203,6 +204,25 @@ func (r *AgentBootstrapConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	config.Status.DataSecretName = &secret.Name
 	conditions.MarkTrue(config, bootstrapv1alpha1.DataSecretAvailableCondition)
 	return ctrl.Result{}, rerr
+}
+
+func isInstallingState(state string) bool {
+	nonInstallingStates := []string{
+		aimodels.ClusterStatusAddingHosts,
+		aimodels.ClusterStatusPendingForInput,
+		aimodels.ClusterStatusInsufficient,
+		aimodels.ClusterStatusReady,
+	}
+	for _, nonInstallingState := range nonInstallingStates {
+		if nonInstallingState == state {
+			return false
+		}
+	}
+	return true
+}
+
+func isInstalling(machine *clusterv1.Machine, state string) bool {
+	return util.IsControlPlaneMachine(machine) && !(state == "") && isInstallingState(state)
 }
 
 func (r *AgentBootstrapConfigReconciler) ensureInfraEnv(ctx context.Context, config *bootstrapv1alpha1.AgentBootstrapConfig, clusterDeployment *hivev1.ClusterDeployment) error {
@@ -340,18 +360,30 @@ func (r *AgentBootstrapConfigReconciler) getTypedMachineOwner(ctx context.Contex
 }
 
 func (r *AgentBootstrapConfigReconciler) getInfrastructureRefKey(ctx context.Context, machine *clusterv1.Machine) (types.NamespacedName, error) {
+	var namespace string
 	acp := controlplanev1alpha1.AgentControlPlane{}
 	err := r.getTypedMachineOwner(ctx, machine, &acp)
 	if err != nil {
 		// Machine is not owned by ACP, check for MD
-		md := clusterv1.MachineDeployment{}
-		if err := r.getTypedMachineOwner(ctx, machine, &md); err != nil {
-			return types.NamespacedName{}, fmt.Errorf("machine has neither acp nor md owner")
+		machineSet := clusterv1.MachineSet{}
+		if err := r.getTypedMachineOwner(ctx, machine, &machineSet); err != nil {
+			return types.NamespacedName{}, fmt.Errorf("machine has neither acp nor machineset owner")
+		}
+		log := ctrl.LoggerFrom(ctx)
+
+		log.Info("found MachineSet", "machineset", machineSet, "name", machineSet.Name, "namespace", machineSet.Namespace)
+		namespace = machineSet.Namespace
+		if machineSet.Spec.Template.Spec.InfrastructureRef.Namespace != "" {
+			namespace = machineSet.Spec.Template.Spec.InfrastructureRef.Namespace
 		}
 		return types.NamespacedName{
-			Namespace: md.Spec.Template.Spec.InfrastructureRef.Namespace,
-			Name:      md.Spec.Template.Spec.InfrastructureRef.Name,
+			Namespace: namespace,
+			Name:      machineSet.Spec.Template.Spec.InfrastructureRef.Name,
 		}, nil
+	}
+	namespace = acp.Namespace
+	if acp.Spec.MachineTemplate.InfrastructureRef.Name != "" {
+		namespace = acp.Spec.MachineTemplate.InfrastructureRef.Namespace
 	}
 	return types.NamespacedName{
 		Namespace: acp.Spec.MachineTemplate.InfrastructureRef.Namespace,
@@ -362,7 +394,7 @@ func (r *AgentBootstrapConfigReconciler) getInfrastructureRefKey(ctx context.Con
 func (r *AgentBootstrapConfigReconciler) setMetal3MachineTemplateImage(ctx context.Context, config *bootstrapv1alpha1.AgentBootstrapConfig, machine *clusterv1.Machine) error {
 	log := ctrl.LoggerFrom(ctx)
 	tplKey, err := r.getInfrastructureRefKey(ctx, machine)
-	log.WithValues("Metal3MachineTemplate Name", tplKey.Name, "Metal3MachineTemplate Namespace", tplKey.Namespace)
+	log = log.WithValues("Metal3MachineTemplate Name", tplKey.Name, "Metal3MachineTemplate Namespace", tplKey.Namespace)
 
 	if err != nil {
 		return err
@@ -370,7 +402,7 @@ func (r *AgentBootstrapConfigReconciler) setMetal3MachineTemplateImage(ctx conte
 	machineTpl := &metal3.Metal3MachineTemplate{}
 
 	if err := r.Client.Get(ctx, tplKey, machineTpl); err != nil {
-		log.Error(err, "couldn't find machine template")
+		log.Error(err, "couldn't find machine template", "nameeeee", tplKey.Name, "namespaceeeee", tplKey.Namespace)
 		return err
 	}
 
