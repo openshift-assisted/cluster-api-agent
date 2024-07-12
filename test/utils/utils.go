@@ -34,6 +34,14 @@ const (
 	certmanagerURLTmpl = "https://github.com/jetstack/cert-manager/releases/download/%s/cert-manager.yaml"
 )
 
+var workloads = map[string]func() error{
+	"cert-manager": InstallCertManager,
+}
+
+func Install(workload string) {
+	workloads[workload]()
+}
+
 func warnError(err error) {
 	_, _ = fmt.Fprintf(GinkgoWriter, "warning: %v\n", err)
 }
