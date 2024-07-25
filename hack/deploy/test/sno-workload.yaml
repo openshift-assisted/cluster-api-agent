@@ -1,0 +1,205 @@
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: test-sno-controlplane
+  namespace: test-capi
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+      - 192.168.0.0/22
+    services:
+      cidrBlocks:
+      - 10.96.0.0/12
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+    kind: AgentControlPlane
+    name: test-sno-controlplane
+    namespace: test-capi
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: Metal3Cluster
+    name: test-sno-controlplane
+    namespace: test-capi
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: Metal3Cluster
+metadata:
+  name: test-sno-controlplane
+  namespace: test-capi
+spec:
+  controlPlaneEndpoint:
+    host: apiendpointhost
+    port: 9999
+  noCloudProvider: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mirror-registry
+  namespace: test-capi
+data:
+  config.yaml: |
+    apiVersion: operator.openshift.io/v1alpha1
+    kind: ImageContentSourcePolicy
+    metadata:
+      name: icsp-1
+    spec:
+      repositoryDigestMirrors:
+      - mirrors:
+        - 10.1.178.25:5000
+        source: quay.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: icsp-1-config
+data:
+  config.yaml: |
+    apiVersion: machineconfiguration.openshift.io/v1
+    kind: MachineConfig
+    metadata:
+      labels:
+        machineconfiguration.openshift.io/role: worker
+      name: 99-custom
+    spec:
+      config:
+        ignition:
+          version: 3.4.0
+        storage:
+          files:
+            - contents:
+                compression: ""
+                source: data:,-----BEGIN%20CERTIFICATE-----%0ATEST%20CERT%0A-----END%20CERTIFICATE-----%0A
+              mode: 420
+              overwrite: true
+              path: /etc/containers/certs.d/registry.crt
+            - contents:
+                compression: gzip
+                source: data:;base64,H4sIAAAAAAAC/0yM0WrEIBBF3+crBp+rJIWlpbBfEnwQnWyGqrM7KjR/X9K0dB8v95wz6mOEzCtTso2Cxs0q3bh1ZWp4xcX8zt2FGKk1p5S20F2UYl7QJImfpI7FeGibaLc1FLJFEuEVjQFYlr+C93BXWvnrfLLE0FnqsR4j7EcEuDaKQw+56yAAxP+AK6wq6j0gIj778+RmN7+9u9fLx2WaJvND3EfOdlUp9hQPMvGNWrdS827gOwAA//+JF+p3/gAAAA==
+              mode: 420
+              overwrite: true
+              path: /etc/containers/registry.conf
+      kernelArguments:
+        - loglevel=7
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: image-config
+data:
+  image-config.yaml: |
+    apiVersion: config.openshift.io/v1
+    kind: Image
+    metadata:
+      name: cluster
+    spec:
+      registrySources:
+        insecureRegistries:
+        - 10.1.178.25:5000
+      additionalTrustedCA:
+        name: trusted-ca
+  test-ca.yaml: |
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: trusted-ca
+      namespace: openshift-config
+    data:
+      registry.example.com: |
+        -----BEGIN CERTIFICATE-----
+        ...
+        -----END CERTIFICATE-----
+  idms.yaml: |
+    apiVersion: config.openshift.io/v1
+    kind: ImageDigestMirrorSet
+    metadata:
+      name: dockerio-mirror
+    spec:
+      imageDigestMirrors:
+      - mirrors:
+        - 10.1.178.25:5000
+        source: quay.io
+ 
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+kind: AgentControlPlane
+metadata:
+  name: test-sno-controlplane
+  namespace: test-capi
+spec:
+  agentConfigSpec:
+    imageRegistryRef:
+      name: "mirror-registry-config"
+    releaseImage: quay.io/openshift-release-dev/ocp-release:4.15.0-x86_64
+    baseDomain: redhat.com
+  machineTemplate:
+    metadata:
+      annotations:
+        bmac.agent-install.openshift.io/role: "master"
+    infrastructureRef:
+      apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+      kind: Metal3MachineTemplate
+      name: test-sno-controlplane-controlplane
+      namespace: test-capi
+  replicas: 1
+  version: v4.15.0
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: Metal3MachineTemplate
+metadata:
+  name: test-sno-controlplane-controlplane
+  namespace: test-capi
+spec:
+  nodeReuse: true
+  template:
+    spec:
+      automatedCleaningMode: disabled
+      dataTemplate:
+        name: test-sno-controlplane-controlplane-template
+      image:
+        checksum: null
+        checksumType: null
+        format: live-iso
+        url: https://abcde
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: Metal3DataTemplate
+metadata:
+  name: test-sno-controlplane-controlplane-template
+  namespace: test-capi
+spec:
+  clusterName: test-sno-controlplane
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mirror-registry-config
+data:
+  ca-bundle.crt: |
+    -----BEGIN CERTIFICATE-----
+    certificate contents
+    -----END CERTIFICATE-----
+
+  registries.conf: |
+    unqualified-search-registries = ["registry.access.redhat.com", "docker.io"]
+
+    [[registry]]
+       prefix = ""
+       location = "quay.io"
+
+       [[registry.mirror]]
+       location = "10.1.178.25:5000"
+       insecure = true
+       pull-from-mirror = "tag-only"
+    [[registry]]
+      prefix = ""
+      location = "test.com"
+      [[registry.mirror]]
+       location = "10.2.3.41:5000"
+       insecure = true
+    [[registry]]
+      prefix = ""
+      location = "test1.com"
+      [[registry.mirror]]
+       location = "10.2.3.4:5000"

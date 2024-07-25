@@ -16,8 +16,9 @@ import (
 )
 
 type Installer struct {
-	Client    client.Client
-	Workloads []string
+	Client     client.Client
+	Workloads  []string
+	Kubeconfig string
 }
 
 func (i *Installer) kubernetesClusterExists(ctx context.Context, exists string) error {
@@ -31,7 +32,19 @@ func (i *Installer) kubernetesClusterExists(ctx context.Context, exists string) 
 		return fmt.Errorf("failed to create new client")
 	}
 	i.Client = mgr.GetClient()
+	i.Kubeconfig = kubeconfig
 	return nil
+}
+
+func (i *Installer) services(ctx context.Context, action string) error {
+	switch action {
+	case "install":
+		return i.installWorkloads(ctx)
+	case "uninstall":
+		return i.uninstallWorkloads(ctx)
+	default:
+		return fmt.Errorf("unknown action %s", action)
+	}
 }
 
 func (i *Installer) workloadsToInstall(ctx context.Context, whichAreInstalled string) error {
@@ -48,11 +61,18 @@ func (i *Installer) workloadsToInstall(ctx context.Context, whichAreInstalled st
 	return nil
 }
 
-func (i *Installer) installWorkloads(ctx context.Context) {
-	for _, workload := range i.Workloads {
+func (i *Installer) installWorkloads(ctx context.Context) error {
+	/* 	for _, workload := range i.Workloads {
 		utils.Install(workload)
-	}
+	} */
+	return utils.Install(i.Kubeconfig)
+}
 
+func (i *Installer) uninstallWorkloads(ctx context.Context) error {
+	/* 	for _, workload := range i.Workloads {
+		utils.Install(workload)
+	} */
+	return utils.Uninstall(i.Kubeconfig)
 }
 
 func (i *Installer) workloadsSuccessfullyDeployed(ctx context.Context) error {
@@ -73,8 +93,11 @@ func (i *Installer) workloadsSuccessfullyDeployed(ctx context.Context) error {
 
 func InitializeScenario(ctx *godog.ScenarioContext) {
 	installer := &Installer{}
-	ctx.Given(`^[a-z]+ Kubernetes cluster$`, installer.kubernetesClusterExists)
-	ctx.When(`^[a-z]+ workloads are installed$`, installer.workloadsToInstall)
-	ctx.Then(`^I want to install [a-z]+ workloads on the Kubernetes cluster$`, installer.installWorkloads)
-	ctx.Step(`^check that [a-z]+ successfully running$`, installer.workloadsSuccessfullyDeployed)
+	ctx.Step(`^([a-z])+ Kubernetes management cluster$`, installer.kubernetesClusterExists)
+	ctx.Step(`^I want to ([\w]+) all services onto the cluster$`, installer.services)
+	/*
+		 	ctx.When(`^[a-z]+ workloads are installed$`, installer.workloadsToInstall)
+			ctx.Then(`^I want to install [a-z]+ workloads on the Kubernetes cluster$`, installer.installWorkloads)
+			ctx.Step(`^check that [a-z]+ successfully running$`, installer.workloadsSuccessfullyDeployed)
+	*/
 }

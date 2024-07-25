@@ -34,12 +34,28 @@ const (
 	certmanagerURLTmpl = "https://github.com/jetstack/cert-manager/releases/download/%s/cert-manager.yaml"
 )
 
-var workloads = map[string]func() error{
-	"cert-manager": InstallCertManager,
+/*
+	 var workloads = map[string]func() error{
+		"cert-manager": InstallCertManager,
+	}
+*/
+func Install(kubeconfig string) error {
+	err := InstallCertManager(kubeconfig)
+	if err != nil {
+		warnError(err)
+		return err
+	}
+	err = InstallNginxIngress(kubeconfig)
+	if err != nil {
+		warnError(err)
+		return err
+	}
+
+	return nil
 }
 
-func Install(workload string) {
-	workloads[workload]()
+func Uninstall(kubeconfig string) error {
+	return UninstallCertManager(kubeconfig)
 }
 
 func warnError(err error) {
@@ -56,12 +72,12 @@ func InstallPrometheusOperator() error {
 
 // Run executes the provided command within this context
 func Run(cmd *exec.Cmd) ([]byte, error) {
-	dir, _ := GetProjectDir()
-	cmd.Dir = dir
+	/* 	dir, _ := GetProjectDir()
+	   	cmd.Dir = dir
 
-	if err := os.Chdir(cmd.Dir); err != nil {
-		_, _ = fmt.Fprintf(GinkgoWriter, "chdir dir: %s\n", err)
-	}
+	   	if err := os.Chdir(cmd.Dir); err != nil {
+	   		_, _ = fmt.Fprintf(GinkgoWriter, "chdir dir: %s\n", err)
+	   	} */
 
 	cmd.Env = append(os.Environ(), "GO111MODULE=on")
 	command := strings.Join(cmd.Args, " ")
@@ -84,18 +100,77 @@ func UninstallPrometheusOperator() {
 }
 
 // UninstallCertManager uninstalls the cert manager
-func UninstallCertManager() {
+func UninstallCertManager(kubeconfig string) error {
 	url := fmt.Sprintf(certmanagerURLTmpl, certmanagerVersion)
-	cmd := exec.Command("kubectl", "delete", "-f", url)
+	cmd := exec.Command("kubectl", "--kubeconfig", kubeconfig, "delete", "-f", url)
 	if _, err := Run(cmd); err != nil {
-		warnError(err)
+		return err
 	}
+	return nil
+}
+
+func InstallAssistedService() error {
+	// Install assisted service CRDs
+	CRDs := []string{
+		"https://raw.githubusercontent.com/openshift/assisted-service/master/hack/crds/hive.openshift.io_clusterdeployments.yaml",
+		"https://raw.githubusercontent.com/openshift/assisted-service/master/hack/crds/hive.openshift.io_clusterimagesets.yaml",
+		"https://raw.githubusercontent.com/openshift/assisted-service/master/hack/crds/metal3.io_baremetalhosts.yaml",
+		"https://raw.githubusercontent.com/openshift/assisted-service/master/hack/crds/metal3.io_preprovisioningimages.yaml",
+	}
+	for _, crd := range CRDs {
+		cmd := exec.Command("kubectl", "apply", "-f", crd)
+		if _, err := Run(cmd); err != nil {
+			return err
+		}
+	}
+
+	// Install assisted service
+	cmd := exec.Command("kubectl", "kustomize", "-k", "https://github.com/openshift/assisted-service/config/default?ref=master")
+	if _, err := Run(cmd); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ApplyAgentServiceConfig() error {
+	cmd := exec.Command("kubectl", "apply", "-f", "https://github.com/openshift/assisted-service/config/default?ref=master")
+	if _, err := Run(cmd); err != nil {
+		return err
+	}
+	return nil
+}
+
+func InstallNginxIngress(kubeconfig string) error {
+	url := "https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml"
+	cmd := exec.Command("kubectl", "--kubeconfig", kubeconfig "apply", "-f", url)
+	if _, err := Run(cmd); err != nil {
+		return err
+	}
+	return nil
+}
+
+func InstallBootstrapProvider() error {
+	url := "https://raw.githubusercontent.com/openshift-assisted/cluster-api-agent/master/bootstrap-components.yaml"
+	cmd := exec.Command("kubectl", "apply", "-f", url)
+	if _, err := Run(cmd); err != nil {
+		return err
+	}
+	return nil
+}
+
+func InstallControlPlaneProvider() error {
+	url := "https://raw.githubusercontent.com/openshift-assisted/cluster-api-agent/master/controlplane-components.yaml"
+	cmd := exec.Command("kubectl", "apply", "-f", url)
+	if _, err := Run(cmd); err != nil {
+		return err
+	}
+	return nil
 }
 
 // InstallCertManager installs the cert manager bundle.
-func InstallCertManager() error {
+func InstallCertManager(kubeconfig string) error {
 	url := fmt.Sprintf(certmanagerURLTmpl, certmanagerVersion)
-	cmd := exec.Command("kubectl", "apply", "-f", url)
+	cmd := exec.Command("kubectl", "--kubeconfig", kubeconfig, "apply", "-f", url)
 	if _, err := Run(cmd); err != nil {
 		return err
 	}
