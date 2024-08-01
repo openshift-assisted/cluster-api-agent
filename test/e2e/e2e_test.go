@@ -35,7 +35,7 @@ var _ = Describe("controller", Ordered, func() {
 		Expect(utils.InstallPrometheusOperator()).To(Succeed())
 
 		By("installing the cert-manager")
-		Expect(utils.InstallCertManager()).To(Succeed())
+		Expect(utils.InstallCertManager("temp")).To(Succeed())
 
 		By("creating manager namespace")
 		cmd := exec.Command("kubectl", "create", "ns", namespace)
@@ -47,7 +47,7 @@ var _ = Describe("controller", Ordered, func() {
 		utils.UninstallPrometheusOperator()
 
 		By("uninstalling the cert-manager bundle")
-		utils.UninstallCertManager()
+		utils.UninstallCertManager("temp")
 
 		By("removing manager namespace")
 		cmd := exec.Command("kubectl", "delete", "ns", namespace)

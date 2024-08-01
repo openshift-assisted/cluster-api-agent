@@ -40,22 +40,102 @@ const (
 	}
 */
 func Install(kubeconfig string) error {
+	verb := "apply"
 	err := InstallCertManager(kubeconfig)
 	if err != nil {
 		warnError(err)
 		return err
 	}
-	err = InstallNginxIngress(kubeconfig)
+	err = InstallNginxIngress(kubeconfig, verb)
 	if err != nil {
 		warnError(err)
 		return err
 	}
-
+	err = InstallAssistedServiceCRDs(kubeconfig, verb)
+	if err != nil {
+		warnError(err)
+		return err
+	}
+	err = AssistedService(kubeconfig, "kustomize")
+	if err != nil {
+		warnError(err)
+		return err
+	}
+	err = AgentServiceConfig(kubeconfig, verb)
+	if err != nil {
+		warnError(err)
+		return err
+	}
+	err = InstallBootstrapProvider(kubeconfig, verb)
+	if err != nil {
+		warnError(err)
+		return err
+	}
+	err = InstallControlPlaneProvider(kubeconfig, verb)
+	if err != nil {
+		warnError(err)
+		return err
+	}
 	return nil
 }
 
 func Uninstall(kubeconfig string) error {
-	return UninstallCertManager(kubeconfig)
+	verb := "delete"
+	err := UninstallCertManager(kubeconfig)
+	if err != nil {
+		warnError(err)
+		return err
+	}
+	err = InstallNginxIngress(kubeconfig, verb)
+	if err != nil {
+		warnError(err)
+		return err
+	}
+	err = InstallAssistedServiceCRDs(kubeconfig, verb)
+	if err != nil {
+		warnError(err)
+		return err
+	}
+	err = AssistedService(kubeconfig, verb)
+	if err != nil {
+		warnError(err)
+		return err
+	}
+	err = AgentServiceConfig(kubeconfig, verb)
+	if err != nil {
+		warnError(err)
+		return err
+	}
+	err = InstallBMOIronic(kubeconfig, verb)
+	if err != nil {
+		warnError(err)
+		return err
+	}
+	err = InstallBootstrapProvider(kubeconfig, verb)
+	if err != nil {
+		warnError(err)
+		return err
+	}
+	err = InstallControlPlaneProvider(kubeconfig, verb)
+	if err != nil {
+		warnError(err)
+		return err
+	}
+	return nil
+}
+
+func InstallBMOIronic(kubeconfig, verb string) error {
+	url := "https://github.com/jianzzha/sylva-poc/manifests/bmo?ref=main"
+	cmd := exec.Command("kubectl", "--kubeconfig", kubeconfig, verb, "-k", url)
+	if _, err := Run(cmd); err != nil {
+		return err
+	}
+	url = "https://github.com/jianzzha/sylva-poc/manifests/ironic?ref=main"
+	cmd = exec.Command("kubectl", "--kubeconfig", kubeconfig, verb, "-k", url)
+	if _, err := Run(cmd); err != nil {
+		return err
+	}
+	return nil
 }
 
 func warnError(err error) {
@@ -108,8 +188,7 @@ func UninstallCertManager(kubeconfig string) error {
 	}
 	return nil
 }
-
-func InstallAssistedService() error {
+func InstallAssistedServiceCRDs(kubeconfig, verb string) error {
 	// Install assisted service CRDs
 	CRDs := []string{
 		"https://raw.githubusercontent.com/openshift/assisted-service/master/hack/crds/hive.openshift.io_clusterdeployments.yaml",
@@ -118,49 +197,61 @@ func InstallAssistedService() error {
 		"https://raw.githubusercontent.com/openshift/assisted-service/master/hack/crds/metal3.io_preprovisioningimages.yaml",
 	}
 	for _, crd := range CRDs {
-		cmd := exec.Command("kubectl", "apply", "-f", crd)
+		cmd := exec.Command("kubectl", "--kubeconfig", kubeconfig, "apply", "-f", crd)
 		if _, err := Run(cmd); err != nil {
 			return err
 		}
 	}
+	return nil
+}
 
+func AssistedService(kubeconfig, verb string) error {
 	// Install assisted service
-	cmd := exec.Command("kubectl", "kustomize", "-k", "https://github.com/openshift/assisted-service/config/default?ref=master")
+	cmd := exec.Command("kubectl", "--kubeconfig", kubeconfig, verb, "-k", "https://github.com/openshift/assisted-service/config/default?ref=master")
 	if _, err := Run(cmd); err != nil {
 		return err
 	}
 	return nil
 }
 
-func ApplyAgentServiceConfig() error {
-	cmd := exec.Command("kubectl", "apply", "-f", "https://github.com/openshift/assisted-service/config/default?ref=master")
+func UninstallAssistedService(kubeconfig string) error {
+	// Install assisted service
+	cmd := exec.Command("kubectl", "--kubeconfig", kubeconfig, "delete", "-k", "https://github.com/openshift/assisted-service/config/default?ref=master")
 	if _, err := Run(cmd); err != nil {
 		return err
 	}
 	return nil
 }
 
-func InstallNginxIngress(kubeconfig string) error {
+func AgentServiceConfig(kubeconfig, verb string) error {
+	cmd := exec.Command("kubectl", "--kubeconfig", kubeconfig, verb, "-f", "https://github.com/openshift/assisted-service/config/default?ref=master")
+	if _, err := Run(cmd); err != nil {
+		return err
+	}
+	return nil
+}
+
+func InstallNginxIngress(kubeconfig, verb string) error {
 	url := "https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml"
-	cmd := exec.Command("kubectl", "--kubeconfig", kubeconfig "apply", "-f", url)
+	cmd := exec.Command("kubectl", "--kubeconfig", kubeconfig, verb, "-f", url)
 	if _, err := Run(cmd); err != nil {
 		return err
 	}
 	return nil
 }
 
-func InstallBootstrapProvider() error {
+func InstallBootstrapProvider(kubeconfig, verb string) error {
 	url := "https://raw.githubusercontent.com/openshift-assisted/cluster-api-agent/master/bootstrap-components.yaml"
-	cmd := exec.Command("kubectl", "apply", "-f", url)
+	cmd := exec.Command("kubectl", "--kubeconfig", kubeconfig, verb, "-f", url)
 	if _, err := Run(cmd); err != nil {
 		return err
 	}
 	return nil
 }
 
-func InstallControlPlaneProvider() error {
+func InstallControlPlaneProvider(kubeconfig, verb string) error {
 	url := "https://raw.githubusercontent.com/openshift-assisted/cluster-api-agent/master/controlplane-components.yaml"
-	cmd := exec.Command("kubectl", "apply", "-f", url)
+	cmd := exec.Command("kubectl", "--kubeconfig", kubeconfig, verb, "-f", url)
 	if _, err := Run(cmd); err != nil {
 		return err
 	}
