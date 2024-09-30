@@ -206,14 +206,6 @@ func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
 		additionalManifests = append(additionalManifests, acp.Spec.AgentConfigSpec.ManifestsConfigMapRefs...)
 	}
 
-	if acp.Spec.AgentConfigSpec.ImageRegistryRef != nil {
-		if err := r.createImageRegistry(ctx, acp.Spec.AgentConfigSpec.ImageRegistryRef.Name, acp.Namespace); err != nil {
-			log.Error(err, "failed to create image registry config manifest")
-			return nil, err
-		}
-		additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: imageregistry.ImageConfigMapName})
-	}
-
 	aci := &hiveext.AgentClusterInstall{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      clusterDeployment.Name,
@@ -244,6 +236,15 @@ func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
 			},
 			ManifestsConfigMapRefs: additionalManifests,
 		},
+	}
+	if acp.Spec.AgentConfigSpec.ImageRegistryRef != nil {
+		log.Info("Image registry ref detected ", "ref name", acp.Spec.AgentConfigSpec.ImageRegistryRef.Name)
+		/* 	if err := r.createImageRegistry(ctx, acp.Spec.AgentConfigSpec.ImageRegistryRef.Name, acp.Namespace); err != nil {
+			log.Error(err, "failed to create image registry config manifest")
+			return nil, err
+		}
+		additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: imageregistry.ImageConfigMapName}) */
+		aci.Spec.MirrorRegistryRef = &hiveext.MirrorRegistryConfigMapReference{Name: acp.Spec.AgentConfigSpec.ImageRegistryRef.Name, Namespace: acp.Namespace}
 	}
 
 	if len(acp.Spec.AgentConfigSpec.APIVIPs) > 0 && len(acp.Spec.AgentConfigSpec.IngressVIPs) > 0 {
