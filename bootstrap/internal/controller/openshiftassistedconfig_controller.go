@@ -19,6 +19,9 @@ package controller
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/openshift-assisted/cluster-api-agent/assistedinstaller"
@@ -64,7 +67,8 @@ const (
 // OpenshiftAssistedConfigReconciler reconciles a OpenshiftAssistedConfig object
 type OpenshiftAssistedConfigReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme         *runtime.Scheme
+	InfraEnvConfig InfraEnvControllerConfig
 }
 
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=metal3machinetemplates,verbs=list;patch;watch
@@ -246,30 +250,82 @@ func (r *OpenshiftAssistedConfigReconciler) Reconcile(ctx context.Context, req c
 		return ctrl.Result{}, nil
 	}
 
-	if err := r.setMetal3MachineTemplateImage(ctx, config, machine); err != nil {
-		conditions.MarkFalse(
-			config,
-			bootstrapv1alpha1.DataSecretAvailableCondition,
-			bootstrapv1alpha1.PropagatingLiveISOURLFailedReason,
-			clusterv1.ConditionSeverityWarning,
-			"",
-		)
+	// once ISODownloadURL is ready, we know we can query ignition
+	/*
+		if err := r.setMetal3MachineTemplateImage(ctx, config, machine); err != nil {
+			conditions.MarkFalse(
+				config,
+				bootstrapv1alpha1.DataSecretAvailableCondition,
+				bootstrapv1alpha1.PropagatingLiveISOURLFailedReason,
+				clusterv1.ConditionSeverityWarning,
+				"",
+			)
+			return ctrl.Result{}, err
+		}
+
+		// if a metal3 machine booted before the template was updated, then we need to update it
+		if err := r.setMetal3MachineImage(ctx, config, machine); err != nil {
+			conditions.MarkFalse(
+				config,
+				bootstrapv1alpha1.DataSecretAvailableCondition,
+				bootstrapv1alpha1.PropagatingLiveISOURLFailedReason,
+				clusterv1.ConditionSeverityWarning,
+				"",
+			)
+			return ctrl.Result{}, err
+		}
+	*/
+	// Query ignition and set it as user data secret
+	/*
+		token=$(oc get infraenv -n assisted-installer single-node -ojson | jq -r '.status.isoDownloadURL' | cut -d/ -f5)
+		host=$(oc get route -n assisted-installer assisted-service -ojson | jq -r '.spec.host')
+		infraEnvID=$(oc get infraenv -n assisted-installer single-node -ojson | jq -r '.status.bootArtifacts.initrd' | cut -d/ -f5)
+		curl -k -oignition.json "https://$host/api/assisted-install/v2/infra-envs/$infraEnvID/downloads/files?file_name=discovery.ign&api_key=$token"
+	*/
+	infraEnvName, err := getInfraEnvName(config)
+
+	infraEnv := aiv1beta1.InfraEnv{}
+	if err := r.Client.Get(
+		ctx,
+		types.NamespacedName{
+			Namespace: config.Namespace,
+			Name:      infraEnvName,
+		},
+		&infraEnv,
+	); err != nil {
+		log.V(logutil.TraceLevel).Info("could not find infraenv", "name", infraEnvName, "namespace", config.Namespace)
+		return ctrl.Result{}, err
+	}
+	log.V(logutil.TraceLevel).Info("Parsing URL", "url", infraEnv.Status.InfraEnvDebugInfo.EventsURL)
+	u, err := url.Parse(infraEnv.Status.InfraEnvDebugInfo.EventsURL)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	// http: //assisted-service.assisted-installer.com/api/assisted-install/v2/events?api_key=eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJpbmZyYV9lbnZfaWQiOiJlNmY1NTc5My05NWY4LTQ4NGUtODNmMy1hYzMzZjA1ZjI3NGIifQ.HCwlge7dTI8tUR2FC3YPhfIk7hG2p0tcbV1AzaZ2V_o-5lackqPHV18Ai3wPYnUPFLSgtW4-SnL28QsZRW82Vg&infra_env_id=e6f55793-95f8-484e-83f3-ac33f05f274b
+	scheme := u.Scheme
+	hostname := u.Hostname()
+	if r.InfraEnvConfig.UseInternalImageURL {
+		scheme = "http"
+		hostname = "assisted-service.assisted-installer.svc.cluster.local:8090"
+	}
+	log.V(logutil.TraceLevel).Info("Parsing QUERY", "raw_query", u.RawQuery)
+	q, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	log.V(logutil.TraceLevel).Info("Parsed QUERY", "query", q)
+
+	apiKey := q["api_key"][0]
+	infraEnvID := q["infra_env_id"][0]
+	log.V(logutil.TraceLevel).Info("FINDME", "scheme", scheme, "hostname", hostname, "infraEnvID", infraEnvID, "apiKey", apiKey)
+
+	ignition, err := getIgnitionBytes(ctx, scheme, hostname, infraEnvID, apiKey)
+	log.V(logutil.TraceLevel).Info("IGNITION RETRIEVED", "ignition", ignition, "err", err)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	// if a metal3 machine booted before the template was updated, then we need to update it
-	if err := r.setMetal3MachineImage(ctx, config, machine); err != nil {
-		conditions.MarkFalse(
-			config,
-			bootstrapv1alpha1.DataSecretAvailableCondition,
-			bootstrapv1alpha1.PropagatingLiveISOURLFailedReason,
-			clusterv1.ConditionSeverityWarning,
-			"",
-		)
-		return ctrl.Result{}, err
-	}
-
-	secret, err := r.createUserDataSecret(ctx, config)
+	secret, err := r.createUserDataSecret(ctx, config, ignition)
 	if err != nil {
 		log.Error(err, "couldn't create user data secret", "name", config.Name)
 		conditions.MarkFalse(
@@ -286,6 +342,28 @@ func (r *OpenshiftAssistedConfigReconciler) Reconcile(ctx context.Context, req c
 	config.Status.DataSecretName = &secret.Name
 	conditions.MarkTrue(config, bootstrapv1alpha1.DataSecretAvailableCondition)
 	return ctrl.Result{}, rerr
+}
+
+func getIgnitionBytes(ctx context.Context, scheme, hostname, infraEnvID, apiKey string) ([]byte, error) {
+	u := url.URL{
+		Scheme: scheme,
+		Host:   hostname,
+		Path:   fmt.Sprintf("/api/assisted-install/v2/infra-envs/%s/downloads/files", infraEnvID),
+	}
+	queryValues := url.Values{}
+	queryValues.Set("file_name", "discovery.ign")
+	queryValues.Set("api_key", apiKey)
+	u.RawQuery = queryValues.Encode()
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+	httpClient := &http.Client{}
+	httpResp, err := httpClient.Do(httpReq)
+	if err != nil {
+		return []byte{}, err
+	}
+	if httpResp.StatusCode != http.StatusOK {
+		return []byte{}, fmt.Errorf("ignition request to %s returned status %d", httpReq.URL.String(), httpResp.StatusCode)
+	}
+	return io.ReadAll(httpResp.Body)
 }
 
 // Ensures InfraEnv exists
@@ -375,10 +453,7 @@ func (r *OpenshiftAssistedConfigReconciler) getClusterDeployment(
 }
 
 // Creates UserData secret
-func (r *OpenshiftAssistedConfigReconciler) createUserDataSecret(
-	ctx context.Context,
-	config *bootstrapv1alpha1.OpenshiftAssistedConfig,
-) (*corev1.Secret, error) {
+func (r *OpenshiftAssistedConfigReconciler) createUserDataSecret(ctx context.Context, config *bootstrapv1alpha1.OpenshiftAssistedConfig, ignition []byte) (*corev1.Secret, error) {
 	secret := &corev1.Secret{}
 	if err := r.Client.Get(ctx, client.ObjectKey{Namespace: config.Namespace, Name: config.Name}, secret); err != nil {
 		if !apierrors.IsNotFound(err) {
@@ -386,6 +461,11 @@ func (r *OpenshiftAssistedConfigReconciler) createUserDataSecret(
 		}
 		secret.Name = config.Name
 		secret.Namespace = config.Namespace
+		secret.Data = map[string][]byte{
+			"value":  ignition,
+			"format": []byte("ignition"),
+		}
+		secret.Type = clusterv1.ClusterSecretType
 		if err := controllerutil.SetOwnerReference(config, secret, r.Scheme); err != nil {
 			return nil, err
 		}

@@ -84,10 +84,11 @@ spec:
       dataTemplate:
         name: test-multinode-controlplane-template
       image:
-        checksum: null
-        checksumType: null
-        format: live-iso
-        url: https://abcde
+        checksum: https://mirror.openshift.com/pub/openshift-v4/dependencies/rhcos/4.17/4.17.0/sha256sum.txt
+        checksumType: sha256
+        format: qcow2
+        #url: https://mirror.openshift.com/pub/openshift-v4/dependencies/rhcos/4.17/4.17.0/rhcos-4.17.0-x86_64-qemu.x86_64.qcow2.gz
+        url: https://mirror.openshift.com/pub/openshift-v4/dependencies/rhcos/4.17/4.17.0/rhcos-4.17.0-x86_64-nutanix.x86_64.qcow2
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
 kind: Metal3MachineTemplate
@@ -102,10 +103,11 @@ spec:
       dataTemplate:
         name: test-multinode-workers-template
       image:
-        checksum: null
-        checksumType: null
-        format: live-iso
-        url: https://abcde
+        checksum: https://mirror.openshift.com/pub/openshift-v4/dependencies/rhcos/4.17/4.17.0/sha256sum.txt
+        checksumType: sha256
+        format: qcow2
+        url: https://mirror.openshift.com/pub/openshift-v4/dependencies/rhcos/4.17/4.17.0/rhcos-4.17.0-x86_64-nutanix.x86_64.qcow2
+  #https://mirror.openshift.com/pub/openshift-v4/dependencies/rhcos/4.17/4.17.0/rhcos-4.17.0-x86_64-qemu.x86_64.qcow2.gz
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
 kind: Metal3DataTemplate

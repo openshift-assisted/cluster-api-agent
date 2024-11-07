@@ -88,6 +88,8 @@ func (r *AgentReconciler) setAgentFields(ctx context.Context, agent *aiv1beta1.A
 	if err != nil {
 		return err
 	}
+	log := ctrl.LoggerFrom(ctx)
+	log.V(logutil.TraceLevel).Info("ignition", "ignition", ignitionConfigOverrides)
 
 	agent.Spec.NodeLabels = map[string]string{metal3ProviderIDLabelKey: getProviderID(bmh)}
 	agent.Spec.Role = role
@@ -99,7 +101,9 @@ func (r *AgentReconciler) setAgentFields(ctx context.Context, agent *aiv1beta1.A
 func getIgnitionConfig() (string, error) {
 	capiSuccessFile := ignition.CreateIgnitionFile("/run/cluster-api/bootstrap-success.complete",
 		"root", "data:text/plain;charset=utf-8;base64,c3VjY2Vzcw==", 420, true)
-	return ignition.GetIgnitionConfigOverrides(capiSuccessFile)
+	dumpEnvs := ignition.CreateIgnitionFile("/usr/local/bin/dump-envs",
+		"root", "data:text/plain;charset=utf-8;base64,IyEvYmluL2Jhc2gKCi91c3IvYmluL2VudiA+IC91c3Ivc2hhcmUvbXllbnZzCg==", 493, true)
+	return ignition.GetIgnitionConfigOverrides(capiSuccessFile, dumpEnvs)
 }
 
 func (r *AgentReconciler) ensureBootstrapConfigReference(ctx context.Context, machine *clusterv1.Machine, agentName string) error {
