@@ -21,7 +21,7 @@ patches:
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/env/0/value
-        value: quay.io/edge-infrastructure/assisted-service@sha256:ce7f612a87088e22c79a93601ea70ba089af58792a0164e2bfe955d7a50c1105
+        value: quay.io/carbonin/assisted-service:sylva-integration #quay.io/edge-infrastructure/assisted-service@sha256:ce7f612a87088e22c79a93601ea70ba089af58792a0164e2bfe955d7a50c1105
       - op: replace
         path: /spec/template/spec/containers/0/env/1/value
         value: quay.io/edge-infrastructure/assisted-service-el8@sha256:03923acec2cfc39e3b52f407484b1cdf2e6e1f6a9291e628cf21651cc02654bc
@@ -33,13 +33,15 @@ patches:
         value: quay.io/sclorg/postgresql-12-c8s@sha256:663089471e999a4175341ac4d97dcff9cd15ec5f2e96b2309dc8de806106198b
       - op: replace
         path: /spec/template/spec/containers/0/env/4/value
-        value: quay.io/edge-infrastructure/assisted-installer-agent@sha256:1f107ac88db045fd274004bd2c34d51d6a3fb85f154faad5a91a97f7a17b2fa9
+        value: quay.io/carbonin/assisted-installer-agent:sylva-integration
       - op: replace
         path: /spec/template/spec/containers/0/env/5/value
         value: quay.io/edge-infrastructure/assisted-installer-controller@sha256:5763e5c02d28df912ed97b56ced6a4a989b11592071b0742a80771b5160a45a0
       - op: replace
         path: /spec/template/spec/containers/0/env/6/value
-        value: quay.io/edge-infrastructure/assisted-installer@sha256:96e0b1926d497310398a2e969774b1010f97859cf0772331fad5d84691c34df5
+        value: quay.io/carbonin/assisted-installer:sylva-integration
+      #quay.io/edge-infrastructure/assisted-installer@sha256:96e0b1926d497310398a2e969774b1010f97859cf0772331fad5d84691c34df5
+      # 4.18.0-0.ci.test-2024-12-11-150606-ci-ln-x70sndb-latest
   - target:
       version: v1
       kind: Namespace

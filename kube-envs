@@ -1,0 +1,3 @@
+#!/bin/bash
+
+echo "CUSTOM_KUBELET_LABELS=metal3.io/uuid=${METADATA_UUID}" | tee -a /etc/kubernetes/kubelet-env >/dev/null

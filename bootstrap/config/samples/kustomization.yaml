@@ -3,5 +3,9 @@
 resources:
 - bootstrap_v1beta1_openshiftassistedconfig.yaml
 - bootstrap_v1beta1_openshiftassistedconfigtemplate.yaml
+<<<<<<< Updated upstream
 - controlplane_v1beta1_openshiftassistedcontrolplane.yaml
+=======
+- controlplane_v1beta1_agentcontrolplane.yaml
+>>>>>>> Stashed changes
 #+kubebuilder:scaffold:manifestskustomizesamples

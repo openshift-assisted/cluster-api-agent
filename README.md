@@ -35,6 +35,17 @@ After this we will be able to initialize clusterctl:
 clusterctl init --bootstrap openshift-agent --control-plane openshift-agent -i  metal3:v1.7.0
 ```
 
+## Per host data
+
+
+
+```
+nodeRegistration:
+  name: '${METADATA_NAME}'
+  kubeletExtraLabels:
+  - 'metal3.io/uuid="${METADATA_NMETAL3_NAMESPACE}/${METADATA_NMETAL3_NAME}/${METADATA_UUID}"'
+```
+
 ## Architecture Design
 
 [Detailed architecture design](./docs/architecture_design.md)
