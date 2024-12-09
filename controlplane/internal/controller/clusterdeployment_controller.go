@@ -18,8 +18,9 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
-	controlplanev1alpha1 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha1"
+	controlplanev1alpha2 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha2"
 	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/imageregistry"
 	"github.com/openshift-assisted/cluster-api-agent/util"
 	logutil "github.com/openshift-assisted/cluster-api-agent/util/log"
@@ -40,6 +41,7 @@ import (
 
 const (
 	InstallConfigOverrides = aiv1beta1.Group + "/install-config-overrides"
+	releaseImageRepository = "quay.io/openshift-release-dev/ocp-release"
 )
 
 // ClusterDeploymentReconciler reconciles a ClusterDeployment object
@@ -52,7 +54,7 @@ type ClusterDeploymentReconciler struct {
 func (r *ClusterDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&hivev1.ClusterDeployment{}).
-		Watches(&controlplanev1alpha1.OpenshiftAssistedControlPlane{}, &handler.EnqueueRequestForObject{}).
+		Watches(&controlplanev1alpha2.OpenshiftAssistedControlPlane{}, &handler.EnqueueRequestForObject{}).
 		Watches(&clusterv1.MachineDeployment{}, &handler.EnqueueRequestForObject{}).
 		Complete(r)
 }
@@ -67,7 +69,7 @@ func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	log.WithValues("cluster_deployment", clusterDeployment.Name, "cluster_deployment_namespace", clusterDeployment.Namespace)
 	log.V(logutil.TraceLevel).Info("Reconciling ClusterDeployment")
 
-	acp := controlplanev1alpha1.OpenshiftAssistedControlPlane{}
+	acp := controlplanev1alpha2.OpenshiftAssistedControlPlane{}
 	if err := util.GetTypedOwner(ctx, r.Client, clusterDeployment, &acp); err != nil {
 		log.V(logutil.TraceLevel).Info("Cluster deployment is not owned by OpenshiftAssistedControlPlane")
 		return ctrl.Result{}, nil
@@ -91,27 +93,42 @@ func (r *ClusterDeploymentReconciler) agentClusterInstallExists(ctx context.Cont
 	return err != nil
 }
 
+func getReleaseImage(oacp controlplanev1alpha2.OpenshiftAssistedControlPlane) (string, error) {
+	// expected pattern: quay.io/openshift-release-dev/ocp-release:4.17.0-rc.2-x86_64
+	if releaseImageRepository == "" {
+		return "", fmt.Errorf("no release image repository defined")
+	}
+	if oacp.Spec.Version == "" {
+		return "", fmt.Errorf("no version defined")
+	}
+	return fmt.Sprintf("%s:%s-%s", releaseImageRepository, oacp.Spec.Version, "multi"), nil
+}
+
 func (r *ClusterDeploymentReconciler) ensureAgentClusterInstall(
 	ctx context.Context,
 	clusterDeployment *hivev1.ClusterDeployment,
-	acp controlplanev1alpha1.OpenshiftAssistedControlPlane,
+	oacp controlplanev1alpha2.OpenshiftAssistedControlPlane,
 ) (ctrl.Result, error) {
 	log := ctrl.LoggerFrom(ctx)
 
-	cluster, err := capiutil.GetOwnerCluster(ctx, r.Client, acp.ObjectMeta)
+	cluster, err := capiutil.GetOwnerCluster(ctx, r.Client, oacp.ObjectMeta)
 	if err != nil {
 		log.Error(err, "failed to retrieve owner Cluster from the API Server")
 		return ctrl.Result{}, err
 	}
-
-	imageSet, err := r.createOrUpdateClusterImageSet(ctx, clusterDeployment.Name, acp.Spec.Config.ReleaseImage)
+	releaseImage, err := getReleaseImage(oacp)
+	if err != nil {
+		log.Error(err, "failed to retrieve releaseImage")
+		return ctrl.Result{}, err
+	}
+	imageSet, err := r.createOrUpdateClusterImageSet(ctx, clusterDeployment.Name, releaseImage)
 	if err != nil {
 		log.Error(err, "failed creating ClusterImageSet")
 		return ctrl.Result{}, err
 	}
 
 	workerNodes := r.getWorkerNodesCount(ctx, cluster)
-	aci, err := r.computeAgentClusterInstall(ctx, clusterDeployment, acp, imageSet, cluster, workerNodes)
+	aci, err := r.computeAgentClusterInstall(ctx, clusterDeployment, oacp, imageSet, cluster, workerNodes)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -184,7 +201,7 @@ func (r *ClusterDeploymentReconciler) createOrUpdateAgentClusterInstall(
 func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
 	ctx context.Context,
 	clusterDeployment *hivev1.ClusterDeployment,
-	acp controlplanev1alpha1.OpenshiftAssistedControlPlane,
+	acp controlplanev1alpha2.OpenshiftAssistedControlPlane,
 	imageSet *hivev1.ClusterImageSet,
 	cluster *clusterv1.Cluster,
 	workerReplicas int,
@@ -223,7 +240,7 @@ func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
 				clusterDeployment.Labels[clusterv1.ClusterNameLabel],
 			),
 			OwnerReferences: []metav1.OwnerReference{
-				*metav1.NewControllerRef(&acp, controlplanev1alpha1.GroupVersion.WithKind(openshiftAssistedControlPlaneKind)),
+				*metav1.NewControllerRef(&acp, controlplanev1alpha2.GroupVersion.WithKind(openshiftAssistedControlPlaneKind)),
 			},
 		},
 		Spec: hiveext.AgentClusterInstallSpec{

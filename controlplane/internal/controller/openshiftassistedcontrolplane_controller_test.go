@@ -31,7 +31,7 @@ import (
 	fakeclient "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	controlplanev1alpha1 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha1"
+	controlplanev1alpha2 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha2"
 	testutils "github.com/openshift-assisted/cluster-api-agent/test/utils"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -57,7 +57,7 @@ var _ = Describe("OpenshiftAssistedControlPlane Controller", func() {
 		BeforeEach(func() {
 			k8sClient = fakeclient.NewClientBuilder().
 				WithScheme(testScheme).
-				WithStatusSubresource(&controlplanev1alpha1.OpenshiftAssistedControlPlane{}).Build()
+				WithStatusSubresource(&controlplanev1alpha2.OpenshiftAssistedControlPlane{}).Build()
 
 			mockCtrl = gomock.NewController(GinkgoT())
 			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
@@ -241,7 +241,7 @@ var _ = Describe("OpenshiftAssistedControlPlane Controller", func() {
 				Expect(k8sClient.Get(ctx, typeNamespacedName, openshiftAssistedControlPlane)).To(Succeed())
 
 				condition := conditions.Get(openshiftAssistedControlPlane,
-					controlplanev1alpha1.MachinesCreatedCondition,
+					controlplanev1alpha2.MachinesCreatedCondition,
 				)
 				Expect(condition).NotTo(BeNil())
 				Expect(condition.Message).To(Equal("version 4.12.0 is not supported, the minimum supported version is 4.14.0"))
@@ -251,13 +251,13 @@ var _ = Describe("OpenshiftAssistedControlPlane Controller", func() {
 	})
 })
 
-func getOpenshiftAssistedControlPlane() *controlplanev1alpha1.OpenshiftAssistedControlPlane {
-	return &controlplanev1alpha1.OpenshiftAssistedControlPlane{
+func getOpenshiftAssistedControlPlane() *controlplanev1alpha2.OpenshiftAssistedControlPlane {
+	return &controlplanev1alpha2.OpenshiftAssistedControlPlane{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      openshiftAssistedControlPlaneName,
 			Namespace: namespace,
 		},
-		Spec: controlplanev1alpha1.OpenshiftAssistedControlPlaneSpec{
+		Spec: controlplanev1alpha2.OpenshiftAssistedControlPlaneSpec{
 			Version: "4.16.0",
 		},
 	}

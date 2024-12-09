@@ -19,7 +19,7 @@ package controller
 import (
 	"context"
 
-	"github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha1"
+	"github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha2"
 	"github.com/openshift-assisted/cluster-api-agent/test/utils"
 	hiveext "github.com/openshift/assisted-service/api/hiveextension/v1beta1"
 	"github.com/openshift/assisted-service/models"
@@ -52,7 +52,7 @@ var _ = Describe("ClusterDeployment Controller", func() {
 
 	BeforeEach(func() {
 		k8sClient = fakeclient.NewClientBuilder().WithScheme(testScheme).
-			WithStatusSubresource(&hivev1.ClusterDeployment{}, &v1alpha1.OpenshiftAssistedControlPlane{}).
+			WithStatusSubresource(&hivev1.ClusterDeployment{}, &v1alpha2.OpenshiftAssistedControlPlane{}).
 			Build()
 		Expect(k8sClient).NotTo(BeNil())
 		controllerReconciler = &ClusterDeploymentReconciler{

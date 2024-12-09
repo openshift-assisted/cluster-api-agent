@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package v1alpha1
+package v1alpha2
 
 import (
 	bootstrapv1beta1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1alpha1"
@@ -124,8 +124,6 @@ type OpenshiftAssistedControlPlaneConfigSpec struct {
 
 	// PullSecretRef references pull secret necessary for the cluster installation
 	PullSecretRef *corev1.LocalObjectReference `json:"pullSecretRef,omitempty"`
-
-	ReleaseImage string `json:"releaseImage"`
 
 	// ImageRegistryRef is a reference to a configmap containing both the additional
 	// image registries and their corresponding certificate bundles to be used in the spoke cluster
