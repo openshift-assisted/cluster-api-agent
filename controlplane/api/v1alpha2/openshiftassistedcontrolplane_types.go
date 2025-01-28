@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package v1alpha1
+package v1alpha2
 
 import (
 	bootstrapv1beta1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1alpha1"
@@ -65,7 +65,9 @@ type OpenshiftAssistedControlPlaneSpec struct {
 	MachineTemplate             OpenshiftAssistedControlPlaneMachineTemplate `json:"machineTemplate"`
 	OpenshiftAssistedConfigSpec bootstrapv1beta1.OpenshiftAssistedConfigSpec `json:"openshiftAssistedConfigSpec,omitempty"`
 	Replicas                    int32                                        `json:"replicas,omitempty"`
-	Version                     string                                       `json:"version"`
+	// DistributionVersion describes the targeted OpenShift version
+	DistributionVersion string `json:"distributionVersion"`
+	Version             string `json:"version"`
 }
 
 // OpenshiftAssistedControlPlaneConfigSpec defines configuration for the agent-provisioned cluster
@@ -124,8 +126,6 @@ type OpenshiftAssistedControlPlaneConfigSpec struct {
 
 	// PullSecretRef references pull secret necessary for the cluster installation
 	PullSecretRef *corev1.LocalObjectReference `json:"pullSecretRef,omitempty"`
-
-	ReleaseImage string `json:"releaseImage"`
 
 	// ImageRegistryRef is a reference to a configmap containing both the additional
 	// image registries and their corresponding certificate bundles to be used in the spoke cluster
@@ -203,7 +203,7 @@ type OpenshiftAssistedControlPlaneStatus struct {
 
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status
-//+kubebuilder:resources:shortName=aocp
+//+kubebuilder:resources:shortName=oacp
 // +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas,selectorpath=.status.selector
 // +kubebuilder:printcolumn:name="Cluster",type="string",JSONPath=".metadata.labels['cluster\\.x-k8s\\.io/cluster-name']",description="Cluster"
 // +kubebuilder:printcolumn:name="Initialized",type=boolean,JSONPath=".status.initialized",description="This denotes whether or not the control plane has the uploaded kubeadm-config configmap"

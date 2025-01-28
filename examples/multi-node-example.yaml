@@ -21,7 +21,7 @@ spec:
       cidrBlocks:
         - 10.96.0.0/12
   controlPlaneRef:
-    apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+    apiVersion: controlplane.cluster.x-k8s.io/v1alpha2
     kind: OpenshiftAssistedControlPlane
     name: test-multinode
     namespace: test-capi
@@ -42,11 +42,13 @@ spec:
     port: 6443
   noCloudProvider: true
 ---
-apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+apiVersion: controlplane.cluster.x-k8s.io/v1alpha2
 kind: OpenshiftAssistedControlPlane
 metadata:
   name: test-multinode
   namespace: test-capi
+  annotations:
+    cluster.x-k8s.io/release-image-repository-override: registry.build05.ci.openshift.org/ci-ln-39xp7rk/release
 spec:
   openshiftAssistedConfigSpec:
     pullSecretRef:
@@ -55,13 +57,14 @@ spec:
     nodeRegistration:
       kubeletExtraLabels:
       - 'metal3.io/uuid="${METADATA_UUID}"'
+  distributionVersion: latest
   config:
     apiVIPs:
     - 192.168.222.40
     ingressVIPs:
     - 192.168.222.41
     # should include https://github.com/openshift/machine-config-operator/pull/4794
-    releaseImage: registry.build05.ci.openshift.org/ci-ln-39xp7rk/release:latest
+    #releaseImage: registry.build05.ci.openshift.org/ci-ln-39xp7rk/release:latest
     baseDomain: lab.home
     pullSecretRef:
       name: "pull-secret"
