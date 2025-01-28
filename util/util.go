@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	controlplanev1alpha1 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha1"
+	controlplanev1alpha1 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha2"
 	logutil "github.com/openshift-assisted/cluster-api-agent/util/log"
 
 	"k8s.io/apimachinery/pkg/types"
