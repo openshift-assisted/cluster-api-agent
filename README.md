@@ -217,23 +217,34 @@ kubectl apply -f https://raw.githubusercontent.com/<org>/cluster-api-agent/<tag 
 
 E2E tests can be executed through ansible tasks in a target remote host.
 
-The following env vars are needed:
-`SSH_KEY_FILE` key file to access the remote host
-`REMOTE_HOST` remote host where to execute the tests
-`PULLSECRET` base64 encoded pullsecret to inject into the tests
+#### Prerequisites
+
+Export the following env vars:
+
+`SSH_KEY_FILE` path to the private SSH key file to access the remote host
+`SSH_AUTHORIZED_KEY` value of your public SSH key which is used to access the hosts used for deploying the workload cluster
+`REMOTE_HOST` remote host name where to execute the tests: `root@<REMOTE_HOST>`
+`PULLSECRET` base64-encoded pull secret to inject into the tests
+`DIST_DIR` is this repository directory `/dist` i.e. `$(pwd)/dist`
+`CONTAINER_TAG` is the tag of the controller images built and deployed in the testing environment set this to anything except `latest`
+
+Run the following to generate all the manifests before starting:
+
+```sh
+make generate && make manifests && make build-installer
+```
+
+#### Run the test
 
 Then we can run:
 
-```
+```sh
 ansible-playbook test/ansible/run_test.yaml -i test/ansible/inventory.yaml
 ```
 
 ## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
 
-**NOTE:** Run `make help` for more information on all potential `make` targets
-
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
+Please, read our [CONTRIBUTING](CONTRIBUTING.md) guidelines for more info about how to create, document, and review PRs.
 
 ## License
 
