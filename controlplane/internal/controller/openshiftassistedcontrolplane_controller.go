@@ -139,6 +139,31 @@ func (r *OpenshiftAssistedControlPlaneReconciler) Reconcile(ctx context.Context,
 		return ctrl.Result{}, nil
 	}
 
+	upgrade := false
+	// Check for upgrades
+	if acp.Status.DistributionVersion != "" {
+		log.Info("ACP status dist version is not empty", "version", acp.Status.DistributionVersion)
+		currentACPDistVersion, err := semver.NewVersion(acp.Status.DistributionVersion)
+		if err != nil {
+			log.Error(err, "failed to detect OpenShift version from ACP status", "version", acp.Spec.DistributionVersion)
+			return ctrl.Result{}, err
+		}
+		acpDistVersion, err := semver.NewVersion(acp.Spec.DistributionVersion)
+		if err != nil {
+			log.Error(err, "failed to detect OpenShift version from ACP spec", "version", acp.Spec.DistributionVersion)
+			return ctrl.Result{}, err
+		}
+		if acpDistVersion.Compare(*currentACPDistVersion) > 0 {
+			log.Info("Can upgrade, new dist is greater than current dist", "acpDist", acpDistVersion.String(), "status acp dist", currentACPDistVersion.String())
+			upgrade = true
+		}
+		log.Info("finish checking for upgrades", "acpDist", acpDistVersion.String(), "status acp dist", currentACPDistVersion.String())
+	}
+
+	if upgrade {
+		//TODO: do upgrade by editing the clusterversion
+	}
+
 	cluster, err := capiutil.GetOwnerCluster(ctx, r.Client, acp.ObjectMeta)
 	if err != nil {
 		log.Error(err, "Failed to retrieve owner Cluster from the API Server")
