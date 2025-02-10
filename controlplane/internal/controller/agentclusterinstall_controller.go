@@ -23,6 +23,7 @@ import (
 	controlplanev1alpha2 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha2"
 	"github.com/openshift-assisted/cluster-api-agent/util"
 	logutil "github.com/openshift-assisted/cluster-api-agent/util/log"
+	configv1 "github.com/openshift/api/config/v1"
 	hiveext "github.com/openshift/assisted-service/api/hiveextension/v1beta1"
 	aimodels "github.com/openshift/assisted-service/models"
 	"github.com/pkg/errors"
@@ -30,6 +31,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/tools/clientcmd"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -67,34 +71,92 @@ func (r *AgentClusterInstallReconciler) Reconcile(ctx context.Context, req ctrl.
 		return ctrl.Result{}, err
 	}
 	log.WithValues("openshiftassisted_control_plane", acp.Name, "openshiftassisted_control_plane_namespace", acp.Namespace)
-
-	if err := r.reconcile(ctx, aci, &acp); err != nil {
+	kubeconfigSecret, err := r.reconcile(ctx, aci, &acp)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
 
 	// Check if AgentClusterInstall has moved to day 2 aka control plane is installed
 	if isInstalled(aci) {
+
 		acp.Status.Ready = true
+		setVersion(ctx, kubeconfigSecret, &acp)
 		if err := r.Client.Status().Update(ctx, &acp); err != nil {
 			log.Error(err, "failed setting OpenshiftAssistedControlPlane to ready")
 			return ctrl.Result{}, err
 		}
 	}
+
 	return ctrl.Result{}, nil
 }
+func extractKubeconfigFromSecret(kubeconfigSecret *corev1.Secret) ([]byte, error) {
+	kubeconfig, ok := kubeconfigSecret.Data["kubeconfig"]
+	if !ok {
+		return nil, errors.New("kubeconfig not found in secret")
+	}
+	return kubeconfig, nil
+}
 
+func setVersion(ctx context.Context, kubeconfigSecret *corev1.Secret, acp *controlplanev1alpha2.OpenshiftAssistedControlPlane) error {
+	if kubeconfigSecret == nil {
+
+		return nil
+	}
+	kubeconfig, err := extractKubeconfigFromSecret(kubeconfigSecret)
+	if err != nil {
+		return errors.Wrapf(err, "failed to extract kubeconfig from secret")
+	}
+
+	spokeClient, err := getSpokeClient(kubeconfig)
+	if err != nil {
+		return errors.Wrapf(err, "failed to get client for spoke cluster")
+	}
+
+	var clusterVersion configv1.ClusterVersion
+	err = spokeClient.Get(ctx, types.NamespacedName{Name: "version"}, &clusterVersion)
+	if err != nil {
+
+		return errors.Wrapf(err, "failed to get ClusterVersion from spoke cluster")
+	}
+
+	acp.Status.DistributionVersion = clusterVersion.Status.Desired.Version
+
+	return nil
+}
+
+func getSpokeClient(kubeconfig []byte) (client.Client, error) {
+	clientConfig, err := clientcmd.NewClientConfigFromBytes(kubeconfig)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to get clientconfig from kubeconfig data")
+	}
+
+	restConfig, err := clientConfig.ClientConfig()
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to get restconfig for kube client")
+	}
+
+	schemes := runtime.NewScheme()
+	utilruntime.Must(configv1.Install(schemes))
+	targetClient, err := client.New(restConfig, client.Options{Scheme: schemes})
+	if err != nil {
+		return nil, err
+	}
+
+	return targetClient, nil
+
+}
 func (r *AgentClusterInstallReconciler) reconcile(
 	ctx context.Context,
 	aci *hiveext.AgentClusterInstall,
 	acp *controlplanev1alpha2.OpenshiftAssistedControlPlane,
-) error {
+) (*corev1.Secret, error) {
 	if !hasKubeconfigRef(aci) {
-		return nil
+		return nil, nil
 	}
 
 	kubeconfigSecret, err := r.getACIKubeconfig(ctx, aci, *acp)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	clusterName := acp.Labels[clusterv1.ClusterNameLabel]
@@ -103,20 +165,20 @@ func (r *AgentClusterInstallReconciler) reconcile(
 	}
 
 	if err := r.updateLabels(ctx, kubeconfigSecret, labels); err != nil {
-		return err
+		return kubeconfigSecret, err
 	}
 
 	if !r.ClusterKubeconfigSecretExists(ctx, clusterName, acp.Namespace) {
 		if err := r.createKubeconfig(ctx, kubeconfigSecret, clusterName, *acp); err != nil {
-			return err
+			return kubeconfigSecret, err
 		}
 	}
 
 	acp.Status.Initialized = true
 	if err := r.Client.Status().Update(ctx, acp); err != nil {
-		return err
+		return kubeconfigSecret, err
 	}
-	return nil
+	return kubeconfigSecret, nil
 }
 
 func (r *AgentClusterInstallReconciler) createKubeconfig(
