@@ -61,6 +61,12 @@ const (
 	openshiftAssistedControlPlaneKind = "OpenshiftAssistedControlPlane"
 	acpFinalizer                      = "openshiftassistedcontrolplane." + controlplanev1alpha1.Group + "/deprovision"
 	placeholderPullSecretName         = "placeholder-pull-secret"
+
+	// UpgradeImageOverrideAnnotation is a (temporary) solution to provide an upgrade image to CVO
+	// It is used while the OCP version being used for testing is not GA and should not be necessary if
+	// a GA version of OCP is used.
+	// Example: GA version = 4.19.0, Non-GA = 4.19.0-0.nightly-2025-01-30-091858
+	UpgradeImageOverrideAnnotation = "cluster.x-k8s.io/upgrade-image-override"
 )
 
 // OpenshiftAssistedControlPlaneReconciler reconciles a OpenshiftAssistedControlPlane object
@@ -204,13 +210,14 @@ func (r *OpenshiftAssistedControlPlaneReconciler) Reconcile(ctx context.Context,
 										//return errors.Wrapf(err, "failed to get ClusterVersion from workload cluster")
 									} else {
 										log.Info("CRYSTAL updating the clusterversion")
-										var releaseImage string
-										if releaseImageRepository, ok := acp.Annotations[ReleaseImageRepositoryOverrideAnnotation]; ok {
-											releaseImage = fmt.Sprintf("%s:%s", releaseImageRepository, acp.Spec.DistributionVersion)
-										}
+
 										clusterVersion.Spec.DesiredUpdate = &configv1.Update{
 											Version: acp.Spec.DistributionVersion,
-											Image:   releaseImage,
+										}
+
+										if releaseImage, ok := acp.Annotations[UpgradeImageOverrideAnnotation]; ok {
+											clusterVersion.Spec.DesiredUpdate.Image = releaseImage
+											clusterVersion.Spec.DesiredUpdate.Force = true
 										}
 										err = workloadClient.Update(ctx, &clusterVersion)
 										if err != nil {
