@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	controlplanev1alpha2 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha2"
+	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/workloadclient"
 	"github.com/openshift-assisted/cluster-api-agent/util"
 	logutil "github.com/openshift-assisted/cluster-api-agent/util/log"
 	configv1 "github.com/openshift/api/config/v1"
@@ -32,8 +33,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	"k8s.io/client-go/tools/clientcmd"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -76,9 +75,10 @@ func (r *AgentClusterInstallReconciler) Reconcile(ctx context.Context, req ctrl.
 		return ctrl.Result{}, err
 	}
 
+	log.Info("CRYSTAL checking if installed")
 	// Check if AgentClusterInstall has moved to day 2 aka control plane is installed
 	if isInstalled(aci) {
-
+		log.Info("CRYSTAL installed")
 		acp.Status.Ready = true
 		setVersion(ctx, kubeconfigSecret, &acp)
 		if err := r.Client.Status().Update(ctx, &acp); err != nil {
@@ -86,7 +86,7 @@ func (r *AgentClusterInstallReconciler) Reconcile(ctx context.Context, req ctrl.
 			return ctrl.Result{}, err
 		}
 	}
-
+	log.Info("CRYSTAL finished checking if installed")
 	return ctrl.Result{}, nil
 }
 func extractKubeconfigFromSecret(kubeconfigSecret *corev1.Secret) ([]byte, error) {
@@ -98,53 +98,34 @@ func extractKubeconfigFromSecret(kubeconfigSecret *corev1.Secret) ([]byte, error
 }
 
 func setVersion(ctx context.Context, kubeconfigSecret *corev1.Secret, acp *controlplanev1alpha2.OpenshiftAssistedControlPlane) error {
+	log := ctrl.LoggerFrom(ctx)
 	if kubeconfigSecret == nil {
-
+		log.Info("unable to set version in status yet, kubeconfig secret not available")
 		return nil
 	}
 	kubeconfig, err := extractKubeconfigFromSecret(kubeconfigSecret)
 	if err != nil {
-		return errors.Wrapf(err, "failed to extract kubeconfig from secret")
+		log.Error(err, "failed to extract kubeconfig from secret", "secret name", kubeconfigSecret.Name)
+		return errors.Wrapf(err, "failed to extract kubeconfig from secret %s", kubeconfigSecret.Name)
 	}
 
-	spokeClient, err := getSpokeClient(kubeconfig)
+	workloadClient, err := workloadclient.GetWorkloadClusterClient(kubeconfig)
 	if err != nil {
-		return errors.Wrapf(err, "failed to get client for spoke cluster")
+		log.Error(err, "failed to establish client for workload cluster from kubeconfig")
+		return errors.Wrapf(err, "failed to establish client for workload cluster from kubeconfig")
 	}
 
 	var clusterVersion configv1.ClusterVersion
-	err = spokeClient.Get(ctx, types.NamespacedName{Name: "version"}, &clusterVersion)
+	err = workloadClient.Get(ctx, types.NamespacedName{Name: "version"}, &clusterVersion)
 	if err != nil {
-
-		return errors.Wrapf(err, "failed to get ClusterVersion from spoke cluster")
+		log.Error(err, "failed to get ClusterVersion from workload cluster")
+		return errors.Wrapf(err, "failed to get ClusterVersion from workload cluster")
 	}
 
 	acp.Status.DistributionVersion = clusterVersion.Status.Desired.Version
-
 	return nil
 }
 
-func getSpokeClient(kubeconfig []byte) (client.Client, error) {
-	clientConfig, err := clientcmd.NewClientConfigFromBytes(kubeconfig)
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to get clientconfig from kubeconfig data")
-	}
-
-	restConfig, err := clientConfig.ClientConfig()
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to get restconfig for kube client")
-	}
-
-	schemes := runtime.NewScheme()
-	utilruntime.Must(configv1.Install(schemes))
-	targetClient, err := client.New(restConfig, client.Options{Scheme: schemes})
-	if err != nil {
-		return nil, err
-	}
-
-	return targetClient, nil
-
-}
 func (r *AgentClusterInstallReconciler) reconcile(
 	ctx context.Context,
 	aci *hiveext.AgentClusterInstall,

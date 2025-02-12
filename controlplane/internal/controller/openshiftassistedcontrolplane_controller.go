@@ -27,8 +27,11 @@ import (
 	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1alpha1"
 	controlplanev1alpha1 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha2"
 	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/auth"
+	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/workloadclient"
 	"github.com/openshift-assisted/cluster-api-agent/util"
 	logutil "github.com/openshift-assisted/cluster-api-agent/util/log"
+	configv1 "github.com/openshift/api/config/v1"
+	hiveext "github.com/openshift/assisted-service/api/hiveextension/v1beta1"
 	hivev1 "github.com/openshift/hive/apis/hive/v1"
 
 	corev1 "k8s.io/api/core/v1"
@@ -139,6 +142,11 @@ func (r *OpenshiftAssistedControlPlaneReconciler) Reconcile(ctx context.Context,
 		return ctrl.Result{}, nil
 	}
 
+	acpDistVersion, err := semver.NewVersion(acp.Spec.DistributionVersion)
+	if err != nil {
+		log.Error(err, "failed to detect OpenShift version from ACP spec", "version", acp.Spec.DistributionVersion)
+		return ctrl.Result{}, err
+	}
 	upgrade := false
 	// Check for upgrades
 	if acp.Status.DistributionVersion != "" {
@@ -148,20 +156,79 @@ func (r *OpenshiftAssistedControlPlaneReconciler) Reconcile(ctx context.Context,
 			log.Error(err, "failed to detect OpenShift version from ACP status", "version", acp.Spec.DistributionVersion)
 			return ctrl.Result{}, err
 		}
-		acpDistVersion, err := semver.NewVersion(acp.Spec.DistributionVersion)
-		if err != nil {
-			log.Error(err, "failed to detect OpenShift version from ACP spec", "version", acp.Spec.DistributionVersion)
-			return ctrl.Result{}, err
-		}
+
 		if acpDistVersion.Compare(*currentACPDistVersion) > 0 {
 			log.Info("Can upgrade, new dist is greater than current dist", "acpDist", acpDistVersion.String(), "status acp dist", currentACPDistVersion.String())
 			upgrade = true
 		}
 		log.Info("finish checking for upgrades", "acpDist", acpDistVersion.String(), "status acp dist", currentACPDistVersion.String())
 	}
-
+	log.Info("CRYSTAL upgrade checking")
 	if upgrade {
 		//TODO: do upgrade by editing the clusterversion
+		log.Info("Can upgrade", "new version", acpDistVersion.String())
+		if acp.Status.ClusterDeploymentRef != nil {
+			log.Info("CRYSTAL cluster dep is not nil")
+			cd := &hivev1.ClusterDeployment{}
+			err := r.Client.Get(ctx, types.NamespacedName{Name: acp.Status.ClusterDeploymentRef.Name, Namespace: acp.Status.ClusterDeploymentRef.Namespace}, cd)
+			if err != nil {
+				log.Error(err, "failed to get cluster deployment for control plane", "cluster deployment name", acp.Status.ClusterDeploymentRef.Name)
+			} else {
+				if cd.Spec.ClusterInstallRef != nil {
+					log.Info("CRYSTAL cluster install ref is not nil")
+					aci := &hiveext.AgentClusterInstall{}
+					err := r.Client.Get(ctx, types.NamespacedName{Name: cd.Spec.ClusterInstallRef.Name, Namespace: acp.Status.ClusterDeploymentRef.Namespace}, aci)
+					if err != nil {
+						log.Error(err, "failed to get agentclusterinstall from clusterdeployment", "cluster deployment name", acp.Status.ClusterDeploymentRef.Name, "agentclusterinstall name", cd.Spec.ClusterInstallRef.Name)
+					} else {
+						log.Info("CRYSTAL getting secret", "name", aci.Spec.ClusterMetadata.AdminKubeconfigSecretRef.Name, "namespace", aci.Namespace)
+						kubeconfigSecret := &corev1.Secret{}
+						err = r.Client.Get(ctx, types.NamespacedName{Name: aci.Spec.ClusterMetadata.AdminKubeconfigSecretRef.Name, Namespace: aci.Namespace}, kubeconfigSecret)
+						if err == nil {
+							kubeconfig, err := extractKubeconfigFromSecret(kubeconfigSecret)
+							if err != nil {
+								log.Error(err, "failed to extract kubeconfig from secret", "secret name", kubeconfigSecret.Name)
+								//return errors.Wrapf(err, "failed to extract kubeconfig from secret %s", kubeconfigSecret.Name)
+							} else {
+								log.Info("CRYSTAL getting workload client")
+								workloadClient, err := workloadclient.GetWorkloadClusterClient(kubeconfig)
+								if err != nil {
+									log.Error(err, "failed to establish client for workload cluster from kubeconfig")
+									//	return errors.Wrapf(err, "failed to establish client for workload cluster from kubeconfig")
+								} else {
+									log.Info("CRYSTAL getting cluster version")
+									var clusterVersion configv1.ClusterVersion
+									err = workloadClient.Get(ctx, types.NamespacedName{Name: "version"}, &clusterVersion)
+									if err != nil {
+										log.Error(err, "failed to get ClusterVersion from workload cluster")
+										//return errors.Wrapf(err, "failed to get ClusterVersion from workload cluster")
+									} else {
+										log.Info("CRYSTAL updating the clusterversion")
+										var releaseImage string
+										if releaseImageRepository, ok := acp.Annotations[ReleaseImageRepositoryOverrideAnnotation]; ok {
+											releaseImage = fmt.Sprintf("%s:%s", releaseImageRepository, acp.Spec.DistributionVersion)
+										}
+										clusterVersion.Spec.DesiredUpdate = &configv1.Update{
+											Version: acp.Spec.DistributionVersion,
+											Image:   releaseImage,
+										}
+										err = workloadClient.Update(ctx, &clusterVersion)
+										if err != nil {
+											log.Error(err, "failed to update cluster version object with new desired version for upgrade")
+										}
+									}
+								}
+							}
+						} else {
+							log.Error(err, "CRYSTAL failed to get kubeconfig secret")
+						}
+					}
+				}
+			}
+		}
+		log.Info("CRYSTAL end of upgrade")
+	} else {
+		log.Info("no upgrade detected")
 	}
 
 	cluster, err := capiutil.GetOwnerCluster(ctx, r.Client, acp.ObjectMeta)
@@ -244,7 +311,7 @@ func (r *OpenshiftAssistedControlPlaneReconciler) computeDesiredMachine(acp *con
 	}
 
 	// Creating a new machine
-	version := &acp.Spec.Version
+	//version := &acp.Spec.Version
 
 	// TODO: add label for role
 	// Construct the basic Machine.
@@ -262,7 +329,7 @@ func (r *OpenshiftAssistedControlPlaneReconciler) computeDesiredMachine(acp *con
 		},
 		Spec: clusterv1.MachineSpec{
 			ClusterName: clusterName,
-			Version:     version,
+			//Version:     version,
 		},
 	}
 
