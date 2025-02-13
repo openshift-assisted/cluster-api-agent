@@ -19,9 +19,11 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/version"
+	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/workloadclient"
 
 	"github.com/coreos/go-semver/semver"
 	"github.com/openshift-assisted/cluster-api-agent/assistedinstaller"
@@ -30,6 +32,8 @@ import (
 	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/auth"
 	"github.com/openshift-assisted/cluster-api-agent/util"
 	logutil "github.com/openshift-assisted/cluster-api-agent/util/log"
+	configv1 "github.com/openshift/api/config/v1"
+	hiveext "github.com/openshift/assisted-service/api/hiveextension/v1beta1"
 	hivev1 "github.com/openshift/hive/apis/hive/v1"
 
 	corev1 "k8s.io/api/core/v1"
@@ -182,6 +186,12 @@ func (r *OpenshiftAssistedControlPlaneReconciler) Reconcile(ctx context.Context,
 	k8sVersion, err := r.OpenShiftVersion.GetK8sVersionFromReleaseImage(ctx, releaseImage, oacp)
 	markKubernetesVersionCondition(oacp, err)
 	oacp.Status.Version = k8sVersion
+	if err := r.setOpenshiftVersionInStatus(ctx, oacp); err != nil {
+		log.Error(err, "failed to set the openshift version in the control plane status")
+	}
+	if isUpgradeRequested(ctx, oacp) {
+		//TODO: Handle upgrade request
+	}
 	return ctrl.Result{}, r.reconcileReplicas(ctx, oacp, cluster)
 }
 
@@ -198,6 +208,32 @@ func markKubernetesVersionCondition(oacp *controlplanev1alpha2.OpenshiftAssisted
 	} else {
 		conditions.MarkTrue(oacp, controlplanev1alpha2.KubernetesVersionAvailableCondition)
 	}
+}
+
+func isUpgradeRequested(ctx context.Context, oacp *controlplanev1alpha2.OpenshiftAssistedControlPlane) bool {
+	log := ctrl.LoggerFrom(ctx)
+	acpDistVersion, err := semver.NewVersion(oacp.Spec.DistributionVersion)
+	if err != nil {
+		log.Error(err, "failed to detect OpenShift version from ACP spec", "version", oacp.Spec.DistributionVersion)
+		return false
+	}
+
+	upgrade := false
+	if oacp.Status.DistributionVersion == "" {
+		return false
+	}
+	currentACPDistVersion, err := semver.NewVersion(oacp.Status.DistributionVersion)
+	if err != nil {
+		log.Error(err, "failed to detect OpenShift version from ACP status", "version", oacp.Spec.DistributionVersion)
+		return false
+	}
+
+	if acpDistVersion.Compare(*currentACPDistVersion) > 0 {
+		log.Info("Upgrade detected, new requested version is greater than current version",
+			"new requested version", acpDistVersion.String(), "current version", currentACPDistVersion.String())
+		upgrade = true
+	}
+	return upgrade
 }
 
 // Ensures dependencies are deleted before allowing the OpenshiftAssistedControlPlane to be deleted
@@ -491,4 +527,70 @@ func (r *OpenshiftAssistedControlPlaneReconciler) ensurePullSecret(
 	}
 	acp.Spec.Config.PullSecretRef = &corev1.LocalObjectReference{Name: secret.Name}
 	return nil
+}
+
+func (r *OpenshiftAssistedControlPlaneReconciler) setOpenshiftVersionInStatus(ctx context.Context, oacp *controlplanev1alpha2.OpenshiftAssistedControlPlane) error {
+	log := ctrl.LoggerFrom(ctx)
+	if !isKubeconfigAvailable(oacp) {
+		return nil
+	}
+	kubeconfigSecret := r.getKubeconfigSecret(ctx, oacp)
+	if kubeconfigSecret == nil {
+		log.Info("kubeconfig secret not found")
+		return nil
+	}
+	kubeconfig, err := util.ExtractKubeconfigFromSecret(kubeconfigSecret)
+	if err != nil {
+		err = errors.Join(err, fmt.Errorf("failed to extract kubeconfig from secret %s", kubeconfigSecret.Name))
+		return err
+	}
+
+	workloadClient, err := workloadclient.GetWorkloadClusterClient(kubeconfig)
+	if err != nil {
+		err = errors.Join(err, fmt.Errorf("failed to establish client for workload cluster from kubeconfig"))
+		return err
+	}
+
+	var clusterVersion configv1.ClusterVersion
+	err = workloadClient.Get(ctx, types.NamespacedName{Name: "version"}, &clusterVersion)
+	if err != nil {
+		err = errors.Join(err, fmt.Errorf(("failed to get ClusterVersion from workload cluster")))
+		return err
+	}
+
+	oacp.Status.DistributionVersion = clusterVersion.Status.Desired.Version
+	return nil
+}
+
+// isKubeconfigAvailable returns true if the openshift assisted control plane
+// condition KubeconfigAvailable is true
+func isKubeconfigAvailable(oacp *controlplanev1alpha2.OpenshiftAssistedControlPlane) bool {
+	kubeconfigFoundCondition := util.FindStatusCondition(oacp.Status.Conditions, controlplanev1alpha2.KubeconfigAvailableCondition)
+	if kubeconfigFoundCondition == nil {
+		return false
+	}
+	return kubeconfigFoundCondition.Status == corev1.ConditionTrue
+}
+
+func (r *OpenshiftAssistedControlPlaneReconciler) getKubeconfigSecret(ctx context.Context, oacp *controlplanev1alpha2.OpenshiftAssistedControlPlane) *corev1.Secret {
+	// Retrieve clusterdeployment
+	cd := &hivev1.ClusterDeployment{}
+	if err := r.Client.Get(ctx, types.NamespacedName{Namespace: oacp.Status.ClusterDeploymentRef.Namespace, Name: oacp.Status.ClusterDeploymentRef.Name}, cd); err != nil {
+		return nil
+	}
+	if cd.Spec.ClusterInstallRef == nil {
+		return nil
+	}
+	// Retrieve agentclusterinstall
+	aci := &hiveext.AgentClusterInstall{}
+	if err := r.Client.Get(ctx, types.NamespacedName{Namespace: cd.Namespace, Name: cd.Spec.ClusterInstallRef.Name}, aci); err != nil {
+		return nil
+	}
+
+	// Retrieve kubeconfig secret
+	secret := &corev1.Secret{}
+	if err := r.Client.Get(ctx, types.NamespacedName{Name: aci.Spec.ClusterMetadata.AdminKubeconfigSecretRef.Name, Namespace: aci.Namespace}, secret); err != nil {
+		return nil
+	}
+	return secret
 }

@@ -57,7 +57,7 @@ spec:
       type: date
     - description: OpenShift version associated with this control plane
       jsonPath: .spec.distributionVersion
-      name: DistributionVersion
+      name: Distribution Version
       type: string
     name: v1alpha2
     schema:
@@ -561,6 +561,11 @@ spec:
                   - type
                   type: object
                 type: array
+              distributionVersion:
+                description: |-
+                  DistributionVersion represents the current OpenShift version installed on the
+                  control plane machines in the cluster.
+                type: string
               failureMessage:
                 description: |-
                   ErrorMessage indicates that there is a terminal problem reconciling the
