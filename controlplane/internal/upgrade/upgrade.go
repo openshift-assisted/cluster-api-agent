@@ -18,6 +18,7 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 const (
@@ -36,7 +37,6 @@ func IsUpgradeRequested(ctx context.Context, oacp *controlplanev1alpha2.Openshif
 		return false
 	}
 
-	upgrade := false
 	if oacp.Status.DistributionVersion == "" {
 		return false
 	}
@@ -46,12 +46,20 @@ func IsUpgradeRequested(ctx context.Context, oacp *controlplanev1alpha2.Openshif
 		return false
 	}
 
-	if oacpDistVersion.Compare(*currentOACPDistVersion) > 0 {
+	versionComparison := oacpDistVersion.Compare(*currentOACPDistVersion)
+	if versionComparison == 0 {
+		log.Info("Versions are the same, no upgrade has been requested")
+		return false
+	}
+
+	if versionComparison > 0 {
 		log.Info("Upgrade detected, new requested version is greater than current version",
 			"new requested version", oacpDistVersion.String(), "current version", currentOACPDistVersion.String())
-		upgrade = true
+		return true
 	}
-	return upgrade
+	log.Info("Upgrade request failed: upgrade version requested is less than the current workload cluster version",
+		"new requested version", oacpDistVersion.String(), "current version", currentOACPDistVersion.String())
+	return false
 }
 
 func GetWorkloadClusterVersion(ctx context.Context, client client.Client,
@@ -66,6 +74,12 @@ func GetWorkloadClusterVersion(ctx context.Context, client client.Client,
 	if err := workloadClient.Get(ctx, types.NamespacedName{Name: "version"}, &clusterVersion); err != nil {
 		err = errors.Join(err, fmt.Errorf(("failed to get ClusterVersion from workload cluster")))
 		return "", err
+	}
+
+	for _, history := range clusterVersion.Status.History {
+		if history.State == configv1.CompletedUpdate {
+			return history.Version, nil
+		}
 	}
 
 	return clusterVersion.Status.Desired.Version, nil
@@ -110,6 +124,69 @@ func isKubeconfigAvailable(oacp *controlplanev1alpha2.OpenshiftAssistedControlPl
 		return false
 	}
 	return kubeconfigFoundCondition.Status == corev1.ConditionTrue
+}
+
+func IsUpgradeCompleted(ctx context.Context, hubClient client.Client,
+	workloadClusterClientGenerator workloadclient.ClientGenerator,
+	oacp *controlplanev1alpha2.OpenshiftAssistedControlPlane) bool {
+	log := log.FromContext(ctx)
+	workloadClient, err := getWorkloadClient(ctx, hubClient, workloadClusterClientGenerator, oacp)
+	if err != nil {
+		return false
+	}
+
+	if workloadClient == nil {
+		return false
+	}
+
+	var clusterVersion configv1.ClusterVersion
+	if err := workloadClient.Get(ctx, types.NamespacedName{Name: "version"}, &clusterVersion); err != nil {
+		//err = errors.Join(err, fmt.Errorf(("failed to get ClusterVersion from workload cluster")))
+		return false
+	}
+	for _, history := range clusterVersion.Status.History {
+		if history.Version == oacp.Spec.DistributionVersion {
+			log.Info("Found history version that matches distribution version", "history", history.Version, "distributionVersion", oacp.Spec.DistributionVersion)
+			if history.State == configv1.CompletedUpdate {
+				log.Info("upgrade is complete!")
+				return true
+			}
+		}
+	}
+	log.Info("upgrade not complete")
+	return false
+}
+
+func CheckNodes(ctx context.Context, hubClient client.Client, workloadClusterClientGenerator workloadclient.ClientGenerator, oacp *controlplanev1alpha2.OpenshiftAssistedControlPlane) error {
+	log := log.FromContext(ctx)
+	workloadClient, err := getWorkloadClient(ctx, hubClient, workloadClusterClientGenerator, oacp)
+	if err != nil {
+		return err
+	}
+
+	if workloadClient == nil {
+		return fmt.Errorf("workload client is not available yet")
+	}
+	nodes := &corev1.NodeList{}
+	if err := workloadClient.List(ctx, nodes, client.MatchingLabels{"node-role.kubernetes.io/control-plane": ""}); err != nil {
+		return err
+	}
+	readyNodes := 0
+	for _, node := range nodes.Items {
+		log.Info("node", "name", node.Name, "os image", node.Status.NodeInfo.OSImage)
+		// It's difficult to determine which OCP version is running on this Node, so we will
+		// just ensure that the Node is ready
+		for _, condition := range node.Status.Conditions {
+			if condition.Type == corev1.NodeReady && condition.Status == corev1.ConditionTrue {
+				readyNodes++
+				break
+			}
+		}
+	}
+	log.Info("Finished checking workload cluster nodes", "ready control plane nodes", readyNodes, "total control plane nodes found", len(nodes.Items))
+	oacp.Status.ReadyReplicas = int32(readyNodes)
+	oacp.Status.UpdatedReplicas = int32(readyNodes)
+	return nil
 }
 
 func UpgradeWorkloadCluster(ctx context.Context, client client.Client,
