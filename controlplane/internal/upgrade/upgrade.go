@@ -120,7 +120,7 @@ func (u *OpenshiftUpgrader) IsDesiredVersionUpdated(ctx context.Context, desired
 	if err != nil {
 		return false, err
 	}
-	return isUpdateInProgress(clusterVersion), nil
+	return strings.HasPrefix(desiredVersion, clusterVersion.Status.Desired.Version), nil
 }
 
 // Updates the cluster's desired version

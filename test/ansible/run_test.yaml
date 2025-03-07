@@ -157,7 +157,7 @@
   - name: wait for assisted-image-service
     shell: kubectl wait --for=condition=ready pod/assisted-image-service-0 --timeout=600s -n assisted-installer
   - name: install clusterctl
-    shell: curl -L https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.8.5/clusterctl-linux-amd64 -o clusterctl && install -o root -g root -m 0755 clusterctl /usr/local/bin/clusterctl
+    shell: "curl -L https://github.com/kubernetes-sigs/cluster-api/releases/download/{{ capi_version }}/clusterctl-linux-amd64 -o clusterctl && install -o root -g root -m 0755 clusterctl /usr/local/bin/clusterctl"
   - name: deploy CAPI
     shell: "clusterctl init --core cluster-api:{{ capi_version }} --bootstrap - --control-plane - --infrastructure metal3:{{ capm3_version }}"
 

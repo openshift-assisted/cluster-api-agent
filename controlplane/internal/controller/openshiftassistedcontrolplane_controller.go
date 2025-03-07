@@ -234,7 +234,6 @@ func (r *OpenshiftAssistedControlPlaneReconciler) upgradeWorkloadCluster(ctx con
 		return ctrl.Result{}, err
 	}
 	if isUpdateInProgress {
-		log.V(logutil.DebugLevel).Info("update is in progress...")
 		conditions.MarkFalse(
 			oacp,
 			controlplanev1alpha2.UpgradeCompletedCondition,

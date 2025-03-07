@@ -128,6 +128,20 @@ var _ = Describe("OpenShift Upgrader", func() {
 			})
 		})
 
+		Context("IsDesiredVersionUpdated", func() {
+			It("should be updated", func() {
+				isUpdated, err := upgrader.IsDesiredVersionUpdated(ctx, "4.10.0")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(isUpdated).To(BeTrue())
+			})
+			It("should not be updated", func() {
+				isUpdated, err := upgrader.IsDesiredVersionUpdated(ctx, "4.11.0")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(isUpdated).To(BeFalse())
+			})
+
+		})
+
 		Context("UpdateClusterVersionDesiredUpdate", func() {
 			It("should update GA version without image", func() {
 				err := upgrader.UpdateClusterVersionDesiredUpdate(ctx, "4.11.0",
@@ -170,6 +184,9 @@ func getClusterVersion(history []configv1.UpdateHistory) configv1.ClusterVersion
 		},
 		Status: configv1.ClusterVersionStatus{
 			History: history,
+			Desired: configv1.Release{
+				Version: "4.10.0",
+			},
 		},
 	}
 }
