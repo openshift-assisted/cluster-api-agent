@@ -148,6 +148,14 @@ func NewOpenshiftAssistedControlPlane(namespace, name string) *controlplanev1alp
 	}
 }
 
+func NewOpenshiftAssistedControlPlaneWithCapbilities(namespace, name string, replicas int32, baselineCapability string, additionalCapabilities []string) *controlplanev1alpha1.OpenshiftAssistedControlPlane {
+	oacp := NewOpenshiftAssistedControlPlane(namespace, name)
+	oacp.Spec.Config.Capabilities.BaselineCapability = baselineCapability
+	oacp.Spec.Config.Capabilities.AdditionalEnabledCapabilities = additionalCapabilities
+	oacp.Spec.Replicas = replicas
+	return oacp
+}
+
 func NewOpenshiftAssistedControlPlaneWithMachineTemplate(
 	namespace, name string,
 	m3Template *metal3.Metal3MachineTemplate,
