@@ -19,6 +19,8 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	configv1 "github.com/openshift/api/config/v1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 	"os"
 
 	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/upgrade"
@@ -62,7 +64,6 @@ func init() {
 	utilruntime.Must(hivev1.AddToScheme(scheme))
 	utilruntime.Must(hiveext.AddToScheme(scheme))
 	utilruntime.Must(bootstrapv1alpha1.AddToScheme(scheme))
-
 	//+kubebuilder:scaffold:scheme
 }
 
@@ -137,7 +138,10 @@ func main() {
 		os.Exit(1)
 	}
 	releaseImageRepository := containers.NewRemoteImageRepository()
-	clientGenerator := workloadclient.NewWorkloadClusterClientGenerator()
+	workloadScheme := runtime.NewScheme()
+	utilruntime.Must(certificatesv1.AddToScheme(workloadScheme))
+	utilruntime.Must(configv1.AddToScheme(workloadScheme))
+	clientGenerator := workloadclient.NewWorkloadClusterClientGenerator(workloadScheme)
 	if err = (&controlplanecontroller.OpenshiftAssistedControlPlaneReconciler{
 		Client:             mgr.GetClient(),
 		Scheme:             mgr.GetScheme(),
@@ -161,7 +165,14 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "AgentClusterInstall")
 		os.Exit(1)
 	}
-	//+kubebuilder:scaffold:builder
+	if err = (&controlplanecontroller.KubeconfigReconciler{
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		ClientGenerator: clientGenerator,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Secret")
+		os.Exit(1)
+	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")

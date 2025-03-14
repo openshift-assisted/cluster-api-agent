@@ -11,9 +11,11 @@ apiVersion: metal3.io/v1alpha1
 kind: BareMetalHost
 metadata:
   annotations:
+    # improve boot speed as we do not need to wait for inspection
     inspect.metal3.io: disabled
   name: REPLACE_NAME
 spec:
+  automatedCleaningMode: disabled
   online: true
   bootMACAddress: REPLACE_MAC
   bootMode: UEFI

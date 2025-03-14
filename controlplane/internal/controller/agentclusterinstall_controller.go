@@ -36,7 +36,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-const kubeconfigSecretKey = "kubeconfig"
+const (
+	kubeconfigSecretKey = "kubeconfig"
+	ctrlPlaneKubeconfig = "openshiftassistedcontrolplane-kubeconfig"
+)
 
 // AgentClusterInstallReconciler reconciles a AgentClusterInstall object
 type AgentClusterInstallReconciler struct {
@@ -254,6 +257,7 @@ func GenerateSecretWithOwner(clusterName client.ObjectKey, data []byte, owner me
 			Namespace: clusterName.Namespace,
 			Labels: map[string]string{
 				clusterv1.ClusterNameLabel: clusterName.Name,
+				clusterv1.WatchLabel:       ctrlPlaneKubeconfig,
 			},
 			OwnerReferences: []metav1.OwnerReference{
 				owner,
