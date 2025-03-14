@@ -129,6 +129,22 @@ type OpenshiftAssistedControlPlaneConfigSpec struct {
 	// ImageRegistryRef is a reference to a configmap containing both the additional
 	// image registries and their corresponding certificate bundles to be used in the spoke cluster
 	ImageRegistryRef *corev1.LocalObjectReference `json:"imageRegistryRef,omitempty"`
+
+	// Capabilities specifies the capabilities set during an OpenShift cluster installation.
+	Capabilities Capabilities `json:"capabilities,omitempty"`
+}
+
+type Capabilities struct {
+	// BaselineCapability provides a default set of capabilities to enable during the installation.
+	// Valid values are vCurrent, v4.x, or None. See the OpenShift doc for more details.
+	// Defaults to None for baremetal platform workload clusters or vCurrent otherwise.
+	// +optional
+	BaselineCapability string `json:"baselineCapability,omitempty"`
+
+	// AdditionalEnabledCapabilities is a list of OpenShift capabilities to specifically enable
+	// during the installation of the workload cluster. It is empty by default.
+	// +optional
+	AdditionalEnabledCapabilities []string `json:"additionalEnabledCapabilities,omitempty"`
 }
 
 // OpenshiftAssistedControlPlaneStatus defines the observed state of OpenshiftAssistedControlPlane

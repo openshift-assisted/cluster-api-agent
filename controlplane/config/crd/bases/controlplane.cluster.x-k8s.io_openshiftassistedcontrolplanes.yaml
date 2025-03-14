@@ -106,6 +106,24 @@ spec:
                     description: BaseDomain is the base domain to which the cluster
                       should belong.
                     type: string
+                  capabilities:
+                    description: Capabilities specifies the capabilities set during
+                      an OpenShift cluster installation.
+                    properties:
+                      additionalEnabledCapabilities:
+                        description: |-
+                          AdditionalEnabledCapabilities is a list of OpenShift capabilities to specifically enable
+                          during the installation of the workload cluster. It is empty by default.
+                        items:
+                          type: string
+                        type: array
+                      baselineCapability:
+                        description: |-
+                          BaselineCapability provides a default set of capabilities to enable during the installation.
+                          Valid values are vCurrent, v4.x, or None. See the OpenShift doc for more details.
+                          Defaults to None for baremetal platform workload clusters or vCurrent otherwise.
+                        type: string
+                    type: object
                   clusterName:
                     description: |-
                       ClusterName is the friendly name of the cluster. It is used for subdomains,

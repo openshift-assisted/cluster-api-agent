@@ -188,4 +188,136 @@ var _ = Describe("ClusterDeployment Controller", func() {
 		k8sClient = nil
 		controllerReconciler = nil
 	})
+
+	Context("setACICapabilities", func() {
+		When("It's a SNO cluster and there's no capabilities defined in the OACP spec", func() {
+			It("should not set capabilities with install config overrides annotation", func() {
+				oacp := utils.NewOpenshiftAssistedControlPlaneWithCapbilities(namespace, openshiftAssistedControlPlaneName, int32(1), "", []string{})
+
+				aci := &hiveext.AgentClusterInstall{}
+				err := setACICapabilities(oacp, aci)
+				Expect(err).To(BeNil())
+				Expect(aci.Annotations).To(BeEmpty())
+			})
+		})
+		When("It's a SNO cluster and there's capabilities defined in the OACP spec", func() {
+			It("should have the exact listed capabilities set in the install config overrides annotation", func() {
+				oacp := utils.NewOpenshiftAssistedControlPlaneWithCapbilities(namespace, openshiftAssistedControlPlaneName, int32(1), "", []string{"baremetal", "MachineAPI", "NodeTuning"})
+
+				aci := &hiveext.AgentClusterInstall{}
+				expectedAnnotation := `{"capabilities": {"baselineCapabilitySet": "vCurrent", "additionalEnabledCapabilities": ["baremetal","MachineAPI","NodeTuning"]}}"`
+
+				err := setACICapabilities(oacp, aci)
+				Expect(err).To(BeNil())
+				Expect(aci.Annotations).NotTo(BeEmpty())
+				Expect(aci.Annotations).To(HaveKey(InstallConfigOverrides))
+				Expect(aci.Annotations[InstallConfigOverrides]).To(Equal(expectedAnnotation))
+			})
+		})
+		When("It's a non-baremetal multi-node cluster and there's no capabilities defined in the OACP spec", func() {
+			It("should not set capabilities with install config overrides annotation", func() {
+				oacp := utils.NewOpenshiftAssistedControlPlaneWithCapbilities(namespace, openshiftAssistedControlPlaneName, int32(3), "", []string{})
+
+				aci := &hiveext.AgentClusterInstall{}
+				err := setACICapabilities(oacp, aci)
+				Expect(err).To(BeNil())
+				Expect(aci.Annotations).To(BeEmpty())
+			})
+		})
+		When("It's a non-baremetal multi-node cluster and there's capabilities defined in the OACP spec", func() {
+			It("should have the exact listed capabilities set in the install config overrides annotation", func() {
+				oacp := utils.NewOpenshiftAssistedControlPlaneWithCapbilities(namespace, openshiftAssistedControlPlaneName, int32(3), "", []string{"baremetal", "MachineAPI", "NodeTuning"})
+
+				aci := &hiveext.AgentClusterInstall{}
+				expectedAnnotation := `{"capabilities": {"baselineCapabilitySet": "vCurrent", "additionalEnabledCapabilities": ["baremetal","MachineAPI","NodeTuning"]}}"`
+
+				err := setACICapabilities(oacp, aci)
+				Expect(err).To(BeNil())
+				Expect(aci.Annotations).NotTo(BeEmpty())
+				Expect(aci.Annotations).To(HaveKey(InstallConfigOverrides))
+				Expect(aci.Annotations[InstallConfigOverrides]).To(Equal(expectedAnnotation))
+			})
+		})
+		When("It's a baremetal multi-node cluster and there's no capabilities defined in the OACP spec", func() {
+			It("should have the default capabilities set in install config overrides annotation", func() {
+				oacp := utils.NewOpenshiftAssistedControlPlaneWithCapbilities(namespace, openshiftAssistedControlPlaneName, int32(3), "", []string{})
+
+				aci := &hiveext.AgentClusterInstall{Spec: hiveext.AgentClusterInstallSpec{PlatformType: hiveext.BareMetalPlatformType}}
+				expectedAnnotation := `{"capabilities": {"baselineCapabilitySet": "None", "additionalEnabledCapabilities": ["baremetal","Console","Insights","OperatorLifecycleManager","Ingress"]}}"`
+
+				err := setACICapabilities(oacp, aci)
+				Expect(err).To(BeNil())
+				Expect(aci.Annotations).NotTo(BeEmpty())
+				Expect(aci.Annotations).To(HaveKey(InstallConfigOverrides))
+				Expect(aci.Annotations[InstallConfigOverrides]).To(Equal(expectedAnnotation))
+			})
+		})
+		When("It's a baremetal multi-node cluster and there's capabilities defined in the OACP spec", func() {
+			It("should have the specified additional capabilities along with the default list set in install config overrides annotation", func() {
+				oacp := utils.NewOpenshiftAssistedControlPlaneWithCapbilities(namespace, openshiftAssistedControlPlaneName, int32(3), "", []string{"NodeTuning"})
+
+				aci := &hiveext.AgentClusterInstall{Spec: hiveext.AgentClusterInstallSpec{PlatformType: hiveext.BareMetalPlatformType}}
+				expectedAnnotation := `{"capabilities": {"baselineCapabilitySet": "None", "additionalEnabledCapabilities": ["baremetal","Console","Insights","OperatorLifecycleManager","Ingress","NodeTuning"]}}"`
+
+				err := setACICapabilities(oacp, aci)
+				Expect(err).To(BeNil())
+				Expect(aci.Annotations).NotTo(BeEmpty())
+				Expect(aci.Annotations).To(HaveKey(InstallConfigOverrides))
+				Expect(aci.Annotations[InstallConfigOverrides]).To(Equal(expectedAnnotation))
+			})
+		})
+		When("It's a baremetal multi-node cluster and MAPI is specified", func() {
+			It("should not include MAPI in the additional capabilities set in install config overrides annotation", func() {
+				oacp := utils.NewOpenshiftAssistedControlPlaneWithCapbilities(namespace, openshiftAssistedControlPlaneName, int32(3), "", []string{"MachineAPI"})
+
+				aci := &hiveext.AgentClusterInstall{Spec: hiveext.AgentClusterInstallSpec{PlatformType: hiveext.BareMetalPlatformType}}
+				expectedAnnotation := `{"capabilities": {"baselineCapabilitySet": "None", "additionalEnabledCapabilities": ["baremetal","Console","Insights","OperatorLifecycleManager","Ingress"]}}"`
+
+				err := setACICapabilities(oacp, aci)
+				Expect(err).To(BeNil())
+				Expect(aci.Annotations).NotTo(BeEmpty())
+				Expect(aci.Annotations).To(HaveKey(InstallConfigOverrides))
+				Expect(aci.Annotations[InstallConfigOverrides]).To(Equal(expectedAnnotation))
+			})
+			It("should not include MAPI but still include the other capabilities in the additional capabilities set in install config overrides annotation", func() {
+				oacp := utils.NewOpenshiftAssistedControlPlaneWithCapbilities(namespace, openshiftAssistedControlPlaneName, int32(3), "", []string{"MachineAPI", "NodeTuning"})
+
+				aci := &hiveext.AgentClusterInstall{Spec: hiveext.AgentClusterInstallSpec{PlatformType: hiveext.BareMetalPlatformType}}
+				expectedAnnotation := `{"capabilities": {"baselineCapabilitySet": "None", "additionalEnabledCapabilities": ["baremetal","Console","Insights","OperatorLifecycleManager","Ingress","NodeTuning"]}}"`
+
+				err := setACICapabilities(oacp, aci)
+				Expect(err).To(BeNil())
+				Expect(aci.Annotations).NotTo(BeEmpty())
+				Expect(aci.Annotations).To(HaveKey(InstallConfigOverrides))
+				Expect(aci.Annotations[InstallConfigOverrides]).To(Equal(expectedAnnotation))
+			})
+		})
+		When("It's a baremetal multi-node cluster and capability defined in the OACP spec that's already in the default list", func() {
+			It("should not have any duplicates set in install config overrides annotation", func() {
+
+				oacp := utils.NewOpenshiftAssistedControlPlaneWithCapbilities(namespace, openshiftAssistedControlPlaneName, int32(3), "", []string{"baremetal"})
+
+				aci := &hiveext.AgentClusterInstall{Spec: hiveext.AgentClusterInstallSpec{PlatformType: hiveext.BareMetalPlatformType}}
+				expectedAnnotation := `{"capabilities": {"baselineCapabilitySet": "None", "additionalEnabledCapabilities": ["baremetal","Console","Insights","OperatorLifecycleManager","Ingress"]}}"`
+
+				err := setACICapabilities(oacp, aci)
+				Expect(err).To(BeNil())
+				Expect(aci.Annotations).NotTo(BeEmpty())
+				Expect(aci.Annotations).To(HaveKey(InstallConfigOverrides))
+				Expect(aci.Annotations[InstallConfigOverrides]).To(Equal(expectedAnnotation))
+			})
+			It("should not have any duplicates but still have other specified capabilities set in install config overrides annotation", func() {
+				oacp := utils.NewOpenshiftAssistedControlPlaneWithCapbilities(namespace, openshiftAssistedControlPlaneName, int32(3), "", []string{"baremetal", "NodeTuning"})
+
+				aci := &hiveext.AgentClusterInstall{Spec: hiveext.AgentClusterInstallSpec{PlatformType: hiveext.BareMetalPlatformType}}
+				expectedAnnotation := `{"capabilities": {"baselineCapabilitySet": "None", "additionalEnabledCapabilities": ["baremetal","Console","Insights","OperatorLifecycleManager","Ingress","NodeTuning"]}}"`
+
+				err := setACICapabilities(oacp, aci)
+				Expect(err).To(BeNil())
+				Expect(aci.Annotations).NotTo(BeEmpty())
+				Expect(aci.Annotations).To(HaveKey(InstallConfigOverrides))
+				Expect(aci.Annotations[InstallConfigOverrides]).To(Equal(expectedAnnotation))
+			})
+		})
+	})
 })
