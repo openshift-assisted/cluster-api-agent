@@ -242,6 +242,10 @@ Then we can run:
 ansible-playbook test/ansible/run_test.yaml -i test/ansible/inventory.yaml
 ```
 
+## ADRs
+* [001-distribution-version](docs/adr/001-distribution-version.md)
+* [002-distribution-version-upgrades](docs/adr/002-distribution-version-upgrades.md)
+
 ## Contributing
 
 Please, read our [CONTRIBUTING](CONTRIBUTING.md) guidelines for more info about how to create, document, and review PRs.
