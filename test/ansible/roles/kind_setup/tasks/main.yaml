@@ -1,0 +1,10 @@
+---
+- name: install kind
+  shell: curl -Lo ./kind https://kind.sigs.k8s.io/dl/{{ kind_version }}/kind-linux-amd64 && chmod +x ./kind && mv ./kind /usr/local/bin/kind
+- name: delete kind cluster
+  shell: "kind delete cluster --name {{ kind_cluster_name }}"
+- name: create kind cluster
+  shell: 'export INTERNAL_IP={{ internal_ip }} && cat {{ src_dir }}/test/kind.yaml | sed "s/<DEVICE_IP>/${INTERNAL_IP}/g" > /tmp/kind_with_ip.yaml && kind create cluster --name {{ kind_cluster_name }} --config /tmp/kind_with_ip.yaml'
+
+- name: install kubectl
+  shell: curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && mv kubectl /usr/local/bin && chmod +x /usr/local/bin/kubectl

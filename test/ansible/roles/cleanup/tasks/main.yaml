@@ -1,0 +1,27 @@
+---
+- name: delete sushytools pod
+  shell: podman rm -f sushy-tools
+
+# remove kind cluster
+- name: delete kind cluster
+  shell: "kind delete cluster --name {{ kind_cluster_name }}"
+
+# destroy VMs
+- name: Copy VM cleanup script
+  copy:
+    dest: "/tmp/vm_functions"
+    content: |
+      #!/bin/bash
+      function destroy_vm {
+        name=$1
+        mac=$2
+        virsh destroy "${name}" 2>/dev/null || true
+        virsh undefine --domain "${name}" --remove-all-storage --nvram 2>/dev/null || true
+      }
+
+- name: Destroy VMs
+  shell: "source /tmp/vm_functions && for vm in $(virsh list | grep bmh-vm | awk '{ print $2 }'); do destroy_vm $vm; done"
+
+# create libvirt BMH network with dns server
+- name: destroy and undefine libvirt network
+  shell: (virsh net-destroy bmh || true) && (virsh net-undefine bmh || true)

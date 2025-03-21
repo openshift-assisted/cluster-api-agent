@@ -1,0 +1,9 @@
+---
+dependencies:
+  - git
+  - make
+  - podman
+  - qemu-kvm
+  - libvirt
+  - virt-install
+  - containernetworking-plugins
