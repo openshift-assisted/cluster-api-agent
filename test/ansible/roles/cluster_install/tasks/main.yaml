@@ -1,0 +1,26 @@
+---
+# setup test env vars
+- name: Clean current test vars
+  command: rm -rf ~/.test-config
+- name: Define SSH_AUTHORIZED_KEY
+  lineinfile:
+    path: ~/.test-config
+    line: "export SSH_AUTHORIZED_KEY='{{ ssh_authorized_key }}'"
+    create: true
+    state: present
+- name: Define PULLSECRET
+  lineinfile:
+    path: ~/.test-config
+    line: "export PULLSECRET='{{ pullsecret }}'"
+    create: true
+    state: present
+
+# create copy example manifest
+- name: generate manifest with vars
+  shell: source ~/.test-config && cat "{{ src_dir }}/examples/{{ example_manifest }}" | sed 's|<PULLSECRET>|'"${PULLSECRET}"'|g' | sed 's|<SSH_AUTHORIZED_KEY>|'"${SSH_AUTHORIZED_KEY}"'|g' > /tmp/example_manifest.yaml
+
+- name: create test namespace
+  shell: "kubectl create ns {{ test_namespace }} || true"
+
+- name: apply example
+  shell: kubectl -n {{ test_namespace }} apply -f /tmp/example_manifest.yaml

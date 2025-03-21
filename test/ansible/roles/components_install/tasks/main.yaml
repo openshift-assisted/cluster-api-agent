@@ -1,0 +1,62 @@
+---
+- name: deploy cert-manager
+  shell: kubectl apply -f https://github.com/jetstack/cert-manager/releases/download/{{ cert_manager_version }}/cert-manager.yaml
+
+- name: wait for cert-manager
+  shell: kubectl wait --for=condition=available deployment/cert-manager-webhook --timeout=600s -n cert-manager
+
+
+- name: deploy ironic
+  shell: kubectl apply -k "{{ src_dir }}/test/e2e/manifests/ironic"
+- name: wait for ironic
+  shell: kubectl wait --for=condition=available deployment/ironic --timeout=600s -n baremetal-operator-system
+
+- name: deploy BMO
+  shell: kubectl apply -k "{{ src_dir }}/test/e2e/manifests/bmo"
+- name: wait for BMO
+  shell: kubectl wait --for=condition=available deployment/baremetal-operator-controller-manager --timeout=600s -n baremetal-operator-system
+
+- name: deploy metallb
+  shell: kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.13.7/config/manifests/metallb-native.yaml
+- name: wait for metallb
+  shell: kubectl wait --for=condition=available deployment/controller --timeout=300s -n metallb-system
+- name: deploy metallb
+  shell: kubectl apply -f "{{ src_dir }}/test/e2e/manifests/metallb"
+
+- name: create nginx-ingress ns
+  shell: kubectl create ns nginx-ingress
+- name: deploy nginx-ingress
+  shell: kubectl -n nginx-ingress apply -f "{{ src_dir }}/test/e2e/manifests/ingress-nginx"
+- name: wait for load balancer ip
+  shell: bash -c 'external_ip=""; while [ -z $external_ip ]; do echo "Waiting for end point..."; external_ip=$(kubectl -n nginx-ingress get svc ingress-nginx-controller --template="{{ "{{" }}range .status.loadBalancer.ingress{{ "}}" }}{{ "{{" }}.ip{{ "}}" }}{{ "{{" }}end{{ "}}" }}"); [ -z "$external_ip" ] && sleep 10; done; echo "End point ready-" && echo $external_ip > /tmp/loadbalancer_ip'
+- name: show lb IP
+  shell: cat /tmp/loadbalancer_ip
+  register: loadbalancerip
+- name: Debug tests output
+  debug: "msg={{ loadbalancerip.stdout }}"
+
+- name: deploy infra-operator
+  shell: kubectl apply -k "{{ src_dir }}/test/e2e/manifests/infrastructure-operator"
+- name: deploy agentserviceconfig
+  shell: kubectl apply -f "{{ src_dir }}/test/e2e/manifests/infrastructure-operator/agentconfig.yaml"
+- name: wait for assisted-service deployment
+  shell: "until kubectl get -n assisted-installer deployment assisted-service; do sleep 1; done"
+- name: wait for assisted service
+  shell: kubectl wait --for=condition=available deployment/assisted-service --timeout=600s -n assisted-installer
+- name: wait for assisted-image-service
+  shell: kubectl wait --for=condition=ready pod/assisted-image-service-0 --timeout=600s -n assisted-installer
+- name: install clusterctl
+  shell: "curl -L https://github.com/kubernetes-sigs/cluster-api/releases/download/{{ capi_version }}/clusterctl-linux-amd64 -o clusterctl && install -o root -g root -m 0755 clusterctl /usr/local/bin/clusterctl"
+- name: deploy CAPI
+  shell: "clusterctl init --core cluster-api:{{ capi_version }} --bootstrap - --control-plane - --infrastructure metal3:{{ capm3_version }}"
+
+# files generated before ansible
+- name: copy distfiles
+  copy:
+    src: "{{ dist_dir }}"
+    dest: "/tmp"
+- name: set imagePullPolicy CAPBCOA
+  shell: "cat /tmp/dist/bootstrap_install.yaml | sed 's/imagePullPolicy: Always/imagePullPolicy: Never/g' > /tmp/bootstrap_install.yaml && cat /tmp/dist/controlplane_install.yaml | sed 's/imagePullPolicy: Always/imagePullPolicy: Never/g' > /tmp/controlplane_install.yaml"
+
+- name: deploy CAPBCOA
+  shell: kubectl apply -f /tmp/controlplane_install.yaml && kubectl apply -f /tmp/bootstrap_install.yaml

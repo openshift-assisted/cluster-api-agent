@@ -1,0 +1,11 @@
+---
+- name: upgrade cluster
+  shell: "kubectl -n {{ test_namespace }} patch openshiftassistedcontrolplane {{ cluster_name }} --type=merge --patch '{\"spec\": {\"distributionVersion\": \"{{ upgrade_to_version }}\"}}'"
+
+# wait ctrlplane to complete upgrade
+- name: wait controlplane to complete upgrade
+  shell: "kubectl wait -n {{ test_namespace }} openshiftassistedcontrolplane/{{ cluster_name }} --for condition=UpgradeCompleted --timeout 7200s"
+
+# wait ctrlplane to be ready
+- name: wait controlplane to be ready
+  shell: "kubectl wait -n {{ test_namespace }} openshiftassistedcontrolplane/{{ cluster_name }} --for condition=Ready --timeout 600s"

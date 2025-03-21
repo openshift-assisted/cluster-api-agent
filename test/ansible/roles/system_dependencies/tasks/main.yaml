@@ -1,0 +1,21 @@
+---
+- name: Distribution
+  debug: msg="{{ ansible_distribution }}"
+- name: Install EPEL
+  dnf:
+    enablerepo: powertools
+    name:
+      - epel-release
+  when: ansible_distribution != "RedHat"
+- name: Install dependencies
+  dnf:
+    enablerepo: crb
+    name: "{{ dependencies }}"
+    state: latest
+  when: ansible_distribution != "RedHat"
+- name: Install dependencies RHEL
+  dnf:
+    name: "{{ dependencies }}"
+  when: ansible_distribution == "RedHat"
+- name: enable libvirtd
+  command: systemctl enable --now libvirtd

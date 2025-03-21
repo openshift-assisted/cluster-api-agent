@@ -1,0 +1,9 @@
+---
+- name: build images
+  shell: "export CONTAINER_TAG={{ container_tag }} && cd {{ src_dir }} && setsid make docker-build-all"
+
+- name: load images into kind
+  shell: "podman save quay.io/edge-infrastructure/openshift-capi-agent-{{ item }}:{{ container_tag }} > {{ item }}.tar.gz && kind load image-archive --name {{ kind_cluster_name }} {{ item }}.tar.gz"
+  loop:
+    - controlplane
+    - bootstrap

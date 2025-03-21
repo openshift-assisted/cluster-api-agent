@@ -1,0 +1,12 @@
+---
+- name: wait for ACI
+  shell: "until kubectl get -n {{ test_namespace }} aci {{ cluster_name }}; do sleep 1; done"
+
+- name: wait for ACI to be installing
+  shell: "kubectl -n {{ test_namespace }} wait --for=jsonpath='{.status.debugInfo.state}'=installing aci/{{ cluster_name }} --timeout=1200s"
+
+- name: wait controlplane to be ready
+  shell: "kubectl wait -n {{ test_namespace }} openshiftassistedcontrolplane/{{ cluster_name }} --for condition=Ready --timeout 3600s"
+
+- name: make sure ACI to be installed
+  shell: "kubectl -n {{ test_namespace }} wait --for=jsonpath='{.status.debugInfo.state}'=adding-hosts aci/{{ cluster_name }} --timeout=3600s"

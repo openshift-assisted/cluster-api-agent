@@ -1,0 +1,50 @@
+---
+# create libvirt BMH network with dns server
+- name: create libvirt network
+  shell: export LOADBALANCER_IP=$(cat /tmp/loadbalancer_ip) && cat "{{ src_dir}}/test/e2e/libvirt/network-bmh.xml.tpl" | sed "s/<LOADBALANCER_IP>/${LOADBALANCER_IP}/g" >/tmp/libvirt-network-bmh.xml && (virsh net-destroy bmh || true) && (virsh net-undefine bmh || true) && virsh net-define /tmp/libvirt-network-bmh.xml
+- name: start libvirt network
+  shell: virsh net-start bmh
+
+  # create VMs
+- name: Copy VM creation script
+  copy:
+    dest: "/tmp/vm_functions"
+    content: |
+      #!/bin/bash
+      function create_vm {
+        name=$1
+        mac=$2
+        virsh destroy "${name}" 2>/dev/null || true
+        virsh undefine --domain "${name}" --remove-all-storage --nvram 2>/dev/null || true
+        virt-install -n "${name}" --pxe --os-variant=rhel8.0 --ram=16384 --vcpus=8 --network network=bmh,mac="${mac}" --disk size=120,bus=scsi,sparse=yes --check disk_size=off --noautoconsole
+      }
+
+- name: Create BMHs
+  shell: 'source /tmp/vm_functions && create_vm bmh-vm-{{ item }} "00:60:2f:31:81:{{ item }}"'
+  with_sequence: count="{{ number_of_nodes }}" format="%02x"
+
+- name: create test namespace
+  shell: "kubectl create ns {{ test_namespace }} || true"
+
+# create BMHs
+- name: Copy BMH creation script
+  copy:
+    dest: "/tmp/create_bmhs"
+    content: |
+      #!/bin/bash
+      i=0
+      for systemid in $(curl -s 192.168.222.1:8000/redfish/v1/Systems | jq -r '.Members[]."@odata.id"'); do
+        echo "starting VM BMH..."
+        i=$((i+1))
+        name=$(curl -s 192.168.222.1:8000${systemid} | jq -r '.Name')
+        sed -r "s%redfish-virtualmedia.*REPLACE_ID%redfish-virtualmedia+http://192.168.222.1:8000${systemid}%" {{ src_dir}}/test/e2e/bmh/bmh.yaml.tpl | sed -r "s/REPLACE_NAME/${name}/g" | sed -r "s/REPLACE_MAC/00:60:2f:31:81:0${name:0-1}/g" | kubectl -n {{ test_namespace }} apply -f -
+        echo "done"
+      done
+
+- name: create bmhs
+  shell: chmod +x /tmp/create_bmhs && /tmp/create_bmhs
+- name: wait until BMHs
+  shell: "until kubectl get -n {{ test_namespace }} bmh; do sleep 1; done"
+- name: wait for BMHs to be available
+  shell: "kubectl -n {{ test_namespace }} wait --for=jsonpath='{.status.provisioning.state}'=available bmh/bmh-vm-{{ item }}"
+  with_sequence: count="{{ number_of_nodes }}" format="%02x"
