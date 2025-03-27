@@ -26,3 +26,5 @@ go.work
 *.swp
 *.swo
 *~
+hack/__pycache__/*
+hack/test/__pycache__/*
