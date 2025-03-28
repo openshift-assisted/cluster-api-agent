@@ -5,6 +5,12 @@
     distrobox_name: assisted-capi-providers
     kind_version: v0.25.0
     cert_manager_version: v1.5.3
+    # Default image references
+    default_assisted_service_image: "quay.io/edge-infrastructure/assisted-service@sha256:a78af04976f68f4e33b3a53001c959c15b7c350cb2b8836004066a40fd1e261d"
+    default_assisted_image_service_image: "quay.io/edge-infrastructure/assisted-image-service@sha256:007f0b23d6e3f52837f44d3b4f02565e0121967e8b64e75dc38ba1b1d48e58c2"
+    default_assisted_installer_agent_image: "quay.io/edge-infrastructure/assisted-installer-agent@sha256:b9cf4a9246eb3eb2d71dc17f6034c875be9c7d63120fa5a683b975dd878e6b20"
+    default_assisted_installer_controller_image: "quay.io/edge-infrastructure/assisted-installer-controller@sha256:6fd6d481b66b78853214fbce28acbd45fd9345480c70b8775078ce44ba3d2ab8"
+    default_assisted_installer_image: "quay.io/edge-infrastructure/assisted-installer@sha256:7c4e456c16d9f1171a8328485e89d63622a5d1bc24c6e553031119b8027f3384"
     remote_manifests_path: /tmp/manifests
     test_namespace: test-capi
     number_of_nodes: "{{ lookup('ansible.builtin.env', 'NUMBER_OF_NODES', default='7') }}"
@@ -12,8 +18,8 @@
     example_manifest: "{{ cluster_topology }}-example.yaml"
 
 
-    capi_version: v1.9.4
-    capm3_version: v1.9.2
+    capi_version: "{{ lookup('ansible.builtin.env', 'CAPI_VERSION', default='v1.9.4') }}"
+    capm3_version: "{{ lookup('ansible.builtin.env', 'CAPM3_VERSION', default='v1.9.2') }}"
     dist_dir: "{{ lookup('ansible.builtin.env', 'DIST_DIR') }}"
     src_dir: "/tmp/capbcoa"
     kind_cluster_name: capi-baremetal-provider
@@ -148,6 +154,15 @@
   - name: Debug tests output
     debug: "msg={{ loadbalancerip.stdout }}"
 
+  - name: prepare infrastructure-operator on target
+    shell: |
+      envsubst < "{{ src_dir }}/test/e2e/manifests/infrastructure-operator/kustomization.yaml.tpl" > "{{ src_dir }}/test/e2e/manifests/infrastructure-operator/kustomization.yaml"
+    environment:
+      ASSISTED_SERVICE_IMAGE: "{{ lookup('ansible.builtin.env', 'ASSISTED_SERVICE_IMAGE', default=default_assisted_service_image) }}"
+      ASSISTED_IMAGE_SERVICE_IMAGE: "{{ lookup('ansible.builtin.env', 'ASSISTED_IMAGE_SERVICE_IMAGE', default=default_assisted_image_service_image) }}"
+      ASSISTED_INSTALLER_AGENT_IMAGE: "{{ lookup('ansible.builtin.env', 'ASSISTED_INSTALLER_AGENT_IMAGE', default=default_assisted_installer_agent_image) }}"
+      ASSISTED_INSTALLER_CONTROLLER_IMAGE: "{{ lookup('ansible.builtin.env', 'ASSISTED_INSTALLER_CONTROLLER_IMAGE', default=default_assisted_installer_controller_image) }}"
+      ASSISTED_INSTALLER_IMAGE: "{{ lookup('ansible.builtin.env', 'ASSISTED_INSTALLER_IMAGE', default=default_assisted_installer_image) }}"
   - name: deploy infra-operator
     shell: kubectl apply -k "{{ src_dir }}/test/e2e/manifests/infrastructure-operator"
   - name: deploy agentserviceconfig
